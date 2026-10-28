@@ -1,0 +1,16 @@
+{
+  "name": "koersplan",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Persoonlijk dashboard: weekscore, doelen met sparren, investeringsroute en jaaroverzicht. Draait op Railway met Postgres.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pg": "8.23.1"
+  }
+}
