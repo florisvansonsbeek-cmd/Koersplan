@@ -10,6 +10,9 @@
  *   ANTHROPIC_MODEL    optioneel: standaard claude-sonnet-5-5
  *   SESSION_SECRET     optioneel: anders maakt de app zelf een geheim aan in de database
  *   PGSSL              optioneel: "true" als je database SSL vereist
+ *   HANDELSPLAN_URL    optioneel: adres van je Handelsplan-site, bijv. https://handelsplan.vsonsbeek.nl
+ *   HANDELSPLAN_PASSWORD  optioneel: je Handelsplan-wachtwoord; samen met de URL zet dit de koppeling aan
+ *   HANDELSPLAN_SYNC_MINUTES  optioneel: hoe vaak het plan wordt opgehaald, standaard 30 (minimaal 5)
  */
 
 const http = require("node:http");
@@ -27,7 +30,12 @@ const ANTHROPIC_BASE_URL = (process.env.ANTHROPIC_BASE_URL || "https://api.anthr
 const PUBLIC_DIR = path.join(__dirname, "public");
 const SEED_FILE = path.join(__dirname, "seed", "startdata.json");
 
-const COLLECTIONS = ["doelen", "weken", "notities", "invest", "instellingen"];
+const COLLECTIONS = ["doelen", "weken", "notities", "invest", "instellingen", "handelsplan"];
+// Gegevens uit Handelsplan zijn alleen-lezen: de server haalt ze op, de pagina toont ze.
+const READ_ONLY = new Set(["handelsplan"]);
+const HANDELSPLAN_URL = (process.env.HANDELSPLAN_URL || "").replace(/\/+$/, "");
+const HANDELSPLAN_PASSWORD = process.env.HANDELSPLAN_PASSWORD || "";
+const HP_SYNC_MINUTES = Math.max(5, Number(process.env.HANDELSPLAN_SYNC_MINUTES) || 30);
 const ID_RE = /^[A-Za-z0-9_\-.~:@+]{1,200}$/;
 const COOKIE = "koersplan_sessie";
 const SESSION_DAYS = 30;
@@ -131,6 +139,7 @@ function initDb() {
         dbReady = true;
         dbError = "";
         log("Database klaar");
+        syncHandelsplan("start");
         return;
       } catch (e) {
         dbError = e.message;
@@ -207,8 +216,8 @@ function noteFailure(ip) {
 const CSP = [
   "default-src 'self'",
   "script-src 'self'",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' https://fonts.gstatic.com",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self'",
   "img-src 'self' data:",
   "connect-src 'self'",
   "frame-ancestors 'none'",
@@ -265,16 +274,112 @@ const STATIC = {
   "/app.css": ["app.css", "text/css; charset=utf-8"],
   "/favicon.svg": ["favicon.svg", "image/svg+xml"],
 };
-function serveFile(req, res, file, type) {
+const FONT_RE = /^\/fonts\/([a-z0-9-]+\.woff2)$/;
+function serveFile(req, res, file, type, cache) {
   fs.readFile(path.join(PUBLIC_DIR, file), (err, buf) => {
     if (err) return send(req, res, 404, "Niet gevonden");
-    send(req, res, 200, buf, type, { "Cache-Control": "no-cache" });
+    send(req, res, 200, buf, type, { "Cache-Control": cache || "no-cache" });
   });
+}
+
+/* ---------------- Koppeling met Handelsplan ---------------- */
+
+let hpToken = null;
+let hpSyncing = null;
+let hpLastManual = 0;
+
+async function upsertDoc(coll, id, data) {
+  await pool.query(
+    `INSERT INTO ${coll} (id, data, bijgewerkt) VALUES ($1, $2::jsonb, now())
+     ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, bijgewerkt = now()`,
+    [id, JSON.stringify(data)]
+  );
+}
+async function readDoc(coll, id) {
+  const r = await pool.query(`SELECT data FROM ${coll} WHERE id = $1`, [id]);
+  return r.rows[0] ? r.rows[0].data : null;
+}
+async function hpRequest(pathname, init) {
+  return fetch(HANDELSPLAN_URL + pathname, Object.assign({ signal: AbortSignal.timeout(20000) }, init));
+}
+async function hpLogin() {
+  const r = await hpRequest("/api/token", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ password: HANDELSPLAN_PASSWORD }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.token) throw Object.assign(new Error(j.error || `Inloggen bij Handelsplan mislukt (HTTP ${r.status})`), { status: r.status });
+  hpToken = j.token;
+}
+async function hpGetDoc(docPath) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!hpToken) await hpLogin();
+    const r = await hpRequest("/api/doc?path=" + encodeURIComponent(docPath), { headers: { authorization: "Bearer " + hpToken } });
+    if (r.status === 401) { hpToken = null; continue; }
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j) throw Object.assign(new Error(`Handelsplan antwoordde met HTTP ${r.status}`), { status: r.status });
+    return j.exists ? j.data : null;
+  }
+  throw Object.assign(new Error("Inloggen bij Handelsplan lukt niet"), { status: 401 });
+}
+function hpErrorText(e) {
+  if (e.status === 401) return "Het wachtwoord van Handelsplan klopt niet. Controleer HANDELSPLAN_PASSWORD in Railway.";
+  if (e.status === 429) return "Handelsplan blokkeert even na te veel inlogpogingen. Over een kwartier gaat het vanzelf weer.";
+  if (e.status === 503) return "Handelsplan is tijdelijk niet beschikbaar. Koersplan probeert het later vanzelf opnieuw.";
+  if (e.name === "TimeoutError" || e.name === "AbortError") return "Handelsplan reageert niet op tijd.";
+  if (e.cause && e.cause.code) return `Handelsplan is niet bereikbaar (${e.cause.code}). Klopt HANDELSPLAN_URL?`;
+  return e.message || "Onbekende fout bij het ophalen.";
+}
+function syncHandelsplan(reason) {
+  if (!dbReady) return Promise.resolve({ ok: false, fout: "Database nog niet klaar" });
+  if (hpSyncing) return hpSyncing;
+  hpSyncing = (async () => {
+    const started = new Date().toISOString();
+    if (!HANDELSPLAN_URL || !HANDELSPLAN_PASSWORD) {
+      const prev = (await readDoc("handelsplan", "status").catch(() => null)) || {};
+      await upsertDoc("handelsplan", "status", Object.assign({}, prev, {
+        gekoppeld: false, ok: false, urlIngesteld: !!HANDELSPLAN_URL, wachtwoordIngesteld: !!HANDELSPLAN_PASSWORD, laatstePoging: started,
+        fout: !HANDELSPLAN_URL ? "HANDELSPLAN_URL ontbreekt" : "HANDELSPLAN_PASSWORD ontbreekt",
+      })).catch(() => {});
+      return { ok: false, fout: "Niet gekoppeld" };
+    }
+    try {
+      // Eerst één keer inloggen, zodat de twee verzoeken hieronder niet allebei een inlogsleutel aanvragen.
+      if (!hpToken) await hpLogin();
+      const [plan, markt] = await Promise.all([hpGetDoc("plan/current"), hpGetDoc("market/latest")]);
+      if (!plan) throw new Error("Er staat nog geen plan in Handelsplan.");
+      await upsertDoc("handelsplan", "plan", plan);
+      if (markt) await upsertDoc("handelsplan", "markt", markt);
+      await upsertDoc("handelsplan", "status", {
+        gekoppeld: true, ok: true, opgehaald: started, laatstePoging: started, bron: HANDELSPLAN_URL,
+        versie: plan.meta && plan.meta.version != null ? plan.meta.version : null, fout: "",
+      });
+      log(`Handelsplan bijgewerkt (${reason}, versie ${plan.meta && plan.meta.version})`);
+      return { ok: true };
+    } catch (e) {
+      const msg = hpErrorText(e);
+      const prev = (await readDoc("handelsplan", "status").catch(() => null)) || {};
+      await upsertDoc("handelsplan", "status", Object.assign({}, prev, { gekoppeld: true, ok: false, fout: msg, laatstePoging: started, bron: HANDELSPLAN_URL })).catch(() => {});
+      log("Handelsplan ophalen mislukt:", msg);
+      return { ok: false, fout: msg };
+    } finally {
+      hpSyncing = null;
+    }
+  })();
+  return hpSyncing;
 }
 
 /* ---------------- Inlogpagina ---------------- */
 
 function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+const FONT_FACES = `
+@font-face { font-family: "Bricolage Grotesque"; font-weight: 500; font-style: normal; font-display: swap; src: url(/fonts/bricolage-grotesque-latin-500-normal.woff2) format("woff2"); }
+@font-face { font-family: "Bricolage Grotesque"; font-weight: 700; font-style: normal; font-display: swap; src: url(/fonts/bricolage-grotesque-latin-700-normal.woff2) format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 400; font-style: normal; font-display: swap; src: url(/fonts/ibm-plex-sans-latin-400-normal.woff2) format("woff2"); }
+@font-face { font-family: "IBM Plex Sans"; font-weight: 600; font-style: normal; font-display: swap; src: url(/fonts/ibm-plex-sans-latin-600-normal.woff2) format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-weight: 500; font-style: normal; font-display: swap; src: url(/fonts/ibm-plex-mono-latin-500-normal.woff2) format("woff2"); }`;
+
 function loginPage(message, disabled) {
   return `<!doctype html>
 <html lang="nl">
@@ -282,33 +387,40 @@ function loginPage(message, disabled) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
+<meta name="theme-color" content="#0f1923">
 <title>Inloggen · Koersplan</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=IBM+Plex+Mono:wght@500;600&display=swap">
 <style>
-:root { --paper:#f3f5f6; --sheet:#fff; --ink:#15212b; --ink-2:#475563; --ink-3:#5f6b77; --rule:#d7dee3; --ruler:#f4c20d; --down:#b42323; --accent:#1d5aa6; }
-@media (prefers-color-scheme: dark) { :root { --paper:#0e1419; --sheet:#151d24; --ink:#e6ecf0; --ink-2:#a9b5bf; --ink-3:#8794a0; --rule:#27333d; --ruler:#e6b80e; --down:#ef7a7a; --accent:#72a8ec; color-scheme: dark; } }
+${FONT_FACES}
+:root { color-scheme: dark; --band:#0f1923; --band-2:#172532; --line:#243443; --ink:#edf2f6; --muted:#93a2b0; --accent:#dda64b; --accent-2:#e8bc6c; --bad:#f06b60; }
 * { box-sizing: border-box; }
-body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--paper); color: var(--ink);
-  font: 15px/1.5 "Archivo", "Helvetica Neue", Arial, sans-serif; padding: 24px max(16px, env(safe-area-inset-left)); }
-main { width: 100%; max-width: 380px; background: var(--sheet); border: 1px solid var(--rule); border-radius: 4px; padding: 28px 24px; }
-.brand { font-stretch: 72%; font-weight: 850; font-size: 30px; letter-spacing: .03em; text-transform: uppercase; line-height: 1; margin: 0; }
-.bar { height: 8px; margin: 14px 0 22px; border-radius: 2px; background: repeating-linear-gradient(90deg, rgba(0,0,0,.35) 0 1px, transparent 1px 10%), var(--ruler); }
-label { display: block; font: 600 11px/1.2 "IBM Plex Mono", ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
-input { width: 100%; font: inherit; font-size: 16px; padding: 11px 12px; border: 1px solid var(--rule); border-radius: 4px; background: var(--sheet); color: var(--ink); }
-input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-button { margin-top: 14px; width: 100%; font-family: inherit; font-weight: 650; font-size: 15px; line-height: 1; padding: 12px; border: 1px solid var(--ink); border-radius: 4px; background: var(--ink); color: var(--paper); cursor: pointer; }
+html, body { height: 100%; }
+body { margin: 0; display: grid; place-items: center; background: var(--band); color: var(--ink);
+  font: 15px/1.55 "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  padding: 24px max(16px, env(safe-area-inset-right, 0px)) 24px max(16px, env(safe-area-inset-left, 0px)); }
+main { width: 100%; max-width: 380px; }
+.brand { font: 700 34px/1 "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif; letter-spacing: -.02em; margin: 0; }
+.tag { margin: 8px 0 0; color: var(--muted); }
+.gauge { height: 10px; margin: 22px 0 26px; border-radius: 3px;
+  background: repeating-linear-gradient(90deg, rgba(15,25,35,.55) 0 1px, transparent 1px 10%), linear-gradient(90deg, #b07a1c, #dda64b 62%, #243443 62%); }
+form { background: var(--band-2); border: 1px solid var(--line); border-radius: 12px; padding: 22px 20px; }
+label { display: block; font: 500 11px/1.2 "IBM Plex Mono", ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+input { width: 100%; font: inherit; font-size: 16px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--band); color: var(--ink); }
+input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+button { margin-top: 14px; width: 100%; font-family: inherit; font-weight: 600; font-size: 15px; line-height: 1; padding: 12px; border: 0; border-radius: 9px; background: var(--accent); color: #141006; cursor: pointer; }
+button:hover { background: var(--accent-2); }
 button:disabled { opacity: .45; cursor: default; }
-.msg { margin: 0 0 14px; color: var(--down); font-size: 14px; }
-.note { margin: 16px 0 0; color: var(--ink-2); font-size: 13px; }
+.msg { margin: 0 0 14px; color: var(--bad); font-size: 14px; }
+.note { margin: 14px 0 0; color: var(--muted); font-size: 13px; }
 </style>
 </head>
 <body>
 <main>
   <h1 class="brand">Koersplan</h1>
-  <div class="bar" aria-hidden="true"></div>
-  ${message ? `<p class="msg" role="alert">${esc(message)}</p>` : ""}
+  <p class="tag">Je doelen, je week en je handelsplan op één plek.</p>
+  <div class="gauge" aria-hidden="true"></div>
   <form method="post" action="/login">
+    ${message ? `<p class="msg" role="alert">${esc(message)}</p>` : ""}
     <label for="wachtwoord">Wachtwoord</label>
     <input id="wachtwoord" name="wachtwoord" type="password" autocomplete="current-password" required ${disabled ? "disabled" : "autofocus"}>
     <button type="submit" ${disabled ? "disabled" : ""}>Inloggen</button>
@@ -484,7 +596,17 @@ async function api(req, res, url) {
   const parts = url.pathname.split("/").filter(Boolean); // ["api", ...]
 
   if (parts[1] === "config" && method === "GET") {
-    return sendJson(req, res, 200, { spar: !!ANTHROPIC_API_KEY, model: ANTHROPIC_MODEL, db: dbReady });
+    return sendJson(req, res, 200, {
+      spar: !!ANTHROPIC_API_KEY, model: ANTHROPIC_MODEL, db: dbReady,
+      handelsplan: { url: HANDELSPLAN_URL, gekoppeld: !!(HANDELSPLAN_URL && HANDELSPLAN_PASSWORD), minuten: HP_SYNC_MINUTES },
+    });
+  }
+  if (parts[1] === "handelsplan" && parts[2] === "sync" && method === "POST") {
+    if (!dbReady) return sendJson(req, res, 503, { error: "db", message: "Database niet bereikbaar" });
+    if (Date.now() - hpLastManual < 20000) return sendJson(req, res, 429, { error: "te_vaak", message: "Even wachten voor je opnieuw bijwerkt." });
+    hpLastManual = Date.now();
+    const result = await syncHandelsplan("handmatig");
+    return sendJson(req, res, result.ok ? 200 : 502, Object.assign({ error: result.ok ? undefined : "handelsplan", message: result.fout || undefined }, result));
   }
   if (parts[1] === "spar" && method === "POST") return spar(req, res);
 
@@ -508,6 +630,7 @@ async function api(req, res, url) {
     let id = "";
     try { id = decodeURIComponent(parts[3]); } catch { id = ""; }
     if (!COLLECTIONS.includes(coll) || !ID_RE.test(id)) return sendJson(req, res, 400, { error: "pad", message: "Onbekende verzameling of ongeldig id" });
+    if (READ_ONLY.has(coll)) return sendJson(req, res, 403, { error: "alleen_lezen", message: "Deze gegevens komen uit Handelsplan en zijn hier alleen te lezen." });
     if (method === "PUT") {
       const body = await readJson(req, 256 * 1024);
       if (!body || typeof body !== "object" || Array.isArray(body)) return sendJson(req, res, 400, { error: "body", message: "Verwacht een JSON-object" });
@@ -537,6 +660,8 @@ async function handle(req, res) {
   if (p.startsWith("/api/")) return api(req, res, url);
 
   if (STATIC[p] && req.method === "GET") return serveFile(req, res, STATIC[p][0], STATIC[p][1]);
+  const font = FONT_RE.exec(p);
+  if (font && req.method === "GET") return serveFile(req, res, path.join("fonts", font[1]), "font/woff2", "public, max-age=31536000, immutable");
 
   if (p === "/login" && req.method === "GET") {
     if (isAuthed(req)) return redirect(req, res, "/");
@@ -585,7 +710,9 @@ server.listen(PORT, () => {
   log(`Koersplan luistert op poort ${PORT}`);
   if (!APP_PASSWORD) log("Let op: APP_PASSWORD is niet ingesteld. Inloggen kan pas als je die in Railway zet.");
   if (!ANTHROPIC_API_KEY) log("ANTHROPIC_API_KEY niet ingesteld: sparren met Claude staat uit.");
+  if (!HANDELSPLAN_URL || !HANDELSPLAN_PASSWORD) log("Handelsplan niet gekoppeld: zet HANDELSPLAN_URL en HANDELSPLAN_PASSWORD in Railway.");
   initDb();
+  setInterval(() => { if (dbReady) syncHandelsplan("schema"); }, HP_SYNC_MINUTES * 60e3).unref();
 });
 
 function shutdown() {

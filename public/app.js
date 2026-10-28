@@ -120,12 +120,12 @@
   var S = {
     db: null, user: null, owner: null, sparOn: false,
     status: "loading",
-    settings: {}, goals: {}, weeks: {}, notes: [], invest: {},
+    settings: {}, goals: {}, weeks: {}, notes: [], invest: {}, hp: {}, hpCfg: {},
     dirty: new Set(), deleted: new Set(),
-    loaded: { doelen: false, weken: false, notities: false, invest: false, instellingen: false },
+    loaded: { doelen: false, weken: false, notities: false, invest: false, instellingen: false, handelsplan: false },
     view: "overzicht", selMon: null,
     editing: null, draft: null,
-    pfEdit: false, pfDraft: null, routeEdit: false,
+    pfEdit: false, pfDraft: null,
     toolsOk: false,
     chat: { turns: [], busy: false, ctl: null },
   };
@@ -502,7 +502,7 @@
       h("div", null, h("button", { type: "button", class: "link-btn", text: "Mijlpaal toevoegen", onclick: function () { var nm = { id: rid("m"), tekst: "", klaar: false }; d.mijlpalen.push(nm); renderGoals(true); var el = document.getElementById(fid("m-" + nm.id)); if (el) el.focus(); } }))));
 
     form.append(h("div", { class: "form-actions" },
-      h("button", { type: "submit", class: "btn", text: "Opslaan" }),
+      h("button", { type: "submit", class: "btn primary", text: "Opslaan" }),
       h("button", { type: "button", class: "btn ghost", text: "Annuleren", onclick: cancelEdit }),
       h("span", { class: "spacer" }),
       d.isNew ? null : (function () {
@@ -600,7 +600,7 @@
   var SUGS = [
     "Waar moet ik deze week voorrang aan geven?",
     "Zijn mijn doelen realistisch voor één jaar?",
-    "Welk doel is nog niet meetbaar genoeg?",
+    "Wat betekent mijn handelsplan voor deze week?",
     "Ik loop achter. Wat stuur ik bij?"
   ];
   function sparOff(msg) {
@@ -627,7 +627,7 @@
       "Je bent de sparringpartner van " + naam + " in zijn persoonlijke dashboard Koersplan. Hij gebruikt het om te zien of hij op koers ligt met zijn doelen voor het komende jaar en om bij te sturen.",
       "Antwoord in het Nederlands, direct en concreet, als een eerlijke coach die meedenkt. Geen algemene motivatieteksten en geen lange lijsten met tips. Houd het kort, meestal onder de 150 woorden, tenzij hij om meer vraagt. Stel hooguit één vraag terug.",
       "Baseer je op de gegevens hieronder. Zeg eerlijk als iets onrealistisch is, als hij te veel tegelijk wil, of als een doel niet meetbaar is.",
-      "Over beleggen: help hem zijn eigen route, regels en scenario's helder en consequent te maken. Geef geen persoonlijk koop- of verkoopadvies en geen koersvoorspellingen. Je ziet geen actuele koersen; zeg dat als hij ernaar vraagt.",
+      "Over beleggen: zijn handelsplan komt uit zijn eigen Handelsplan-site en staat hieronder samengevat. Help hem consequent volgens zijn eigen plan, niveaus en spelregels te handelen. Geef geen persoonlijk koop- of verkoopadvies en geen koersvoorspellingen. De marktcijfers zijn momentopnames met een datum, geen live koersen; zeg dat als hij ernaar vraagt.",
       S.toolsOk
         ? "Als een concrete wijziging helpt (een doel scherper formuleren, een wekelijkse actie aanpassen, een nieuw doel, of iets vastleggen in het logboek), stel die dan voor met de tools, hooguit drie per antwoord. Hij beslist zelf of hij ze toepast. Noem in je tekst kort wat je voorstelt. Gebruik de doel_id's en actie_id's uit de gegevens."
         : "Als een concrete wijziging helpt, beschrijf die precies; hij past het zelf aan op de pagina."
@@ -674,13 +674,21 @@
       L.push("", "LOGBOEK (nieuwste eerst):");
       notes.forEach(function (n) { var g = n.doel && S.goals[n.doel]; L.push("- " + dateOnly(n.datum) + (g ? " [" + g.titel + "]" : "") + ": " + cut(n.tekst, 350)); });
     }
+    var hpd = hpData();
+    if (hpd.plan) {
+      var P = hpd.plan, hit = hpItems(), PM = P.meta || {}, PX = P.macro || {};
+      L.push("", "HANDELSPLAN (uit zijn Handelsplan-site, versie " + (PM.version != null ? PM.version : "?") + ", stand " + (PM.asOf || "") + "; geen advies, zijn eigen plan):");
+      if (PX.regime || PX.headline) L.push("Regime: " + [PX.regime, PX.riskMode].filter(Boolean).join(", ") + ". " + (PX.headline || ""));
+      if ((P.simple || {}).headline) L.push("Kern: " + P.simple.headline);
+      (P.positions || []).forEach(function (p) { L.push("- " + (p.short || p.name) + ": " + (p.doLabel || p.stance || "") + ". " + cut(p.doNow || "", 220)); });
+      var sigs = (P.triggers || []).map(function (t) { return Object.assign({ t: t }, trigState(t, hit)); }).filter(function (r) { return r.st === "alarm" || r.st === "letop"; });
+      if (sigs.length) L.push("Signalen: " + sigs.map(function (r) { return r.t.label + " " + fmtUnit(r.v, r.t.unit, r.it) + " (" + TRIG[r.st].t.toLowerCase() + ")"; }).join("; "));
+      var nxt = upcoming(P, 4);
+      if (nxt.length) L.push("Komende momenten: " + nxt.map(function (c) { return c.date + " " + c.event; }).join("; "));
+    }
     var plan = S.invest.plan || {}, pf = S.invest.portfolio || {};
-    L.push("", "BELEGGEN (eigen plan; geen live koersen beschikbaar):");
-    if (plan.route) L.push("Route: " + cut(plan.route, 500));
-    if ((plan.regels || []).length) L.push("Regels: " + plan.regels.map(function (r) { return r.tekst; }).join("; "));
+    L.push("", "EIGEN PORTFOLIO EN INLEG (in Koersplan; geen live koersen):");
     if (plan.maxPositie) L.push("Maximaal per positie: " + plan.maxPositie + "%");
-    if ((plan.scenarios || []).length) L.push("Scenario's: " + plan.scenarios.map(function (x) { return "als " + x.als + " dan " + x.dan + " (" + (x.status === "geraakt" ? "geraakt" : "actief") + ")"; }).join("; "));
-    if ((plan.volg || []).length) L.push("Volgt: " + plan.volg.map(function (v) { return v.tekst; }).join(", "));
     var pos = pf.posities || [], tot = pos.reduce(function (a, p) { return a + (Number(p.waarde) || 0); }, 0);
     if (pos.length) L.push("Posities: " + pos.map(function (p) { return tot > 0 && Number(p.waarde) > 0 ? p.naam + " " + Math.round(100 * Number(p.waarde) / tot) + "%" : p.naam; }).join(", ") + (tot > 0 ? "" : " (nog geen waardes ingevuld)"));
     var inl = (S.invest.inleg || {}).maanden || {}, dk = Object.keys(inl).filter(function (k) { return inl[k]; }).sort();
@@ -761,7 +769,7 @@
       p.reden ? h("p", { class: "prop-why", text: p.reden }) : null,
       actions);
     actions.append(
-      h("button", { class: "btn sm", type: "button", text: "Toepassen", onclick: function () { if (applyProposal(p)) { card.classList.add("done"); actions.replaceChildren(h("span", { class: "prop-state", text: "Toegepast" })); } } }),
+      h("button", { class: "btn primary sm", type: "button", text: "Toepassen", onclick: function () { if (applyProposal(p)) { card.classList.add("done"); actions.replaceChildren(h("span", { class: "prop-state", text: "Toegepast" })); } } }),
       h("button", { class: "link-btn", type: "button", text: "Negeren", onclick: function () { actions.replaceChildren(h("span", { class: "prop-state", text: "Genegeerd" })); } }));
     target.props.append(card);
     scrollLog();
@@ -904,11 +912,11 @@
     S.invest.plan = body; queueWrite("invest/plan", body, 0); renderInvest();
   }
   function renderInvest() {
-    renderPortfolio(); renderPlan(); renderDca(); renderScen(); renderWatch(); renderMarketLog();
+    renderHp(); renderPortfolio(); renderMaxInput(); renderDca(); renderMarketLog();
     if (S.view === "investeren") renderHistChart();
     var w = canWrite();
-    ["#rule-form", "#scen-form", "#watch-form", "#mlog-form"].forEach(function (sel) { $(sel).hidden = !w; });
-    $("#pf-edit").hidden = !w; $("#route-edit").hidden = !w || S.routeEdit;
+    $("#mlog-form").hidden = !w;
+    $("#pf-edit").hidden = !w;
     $("#max-input").disabled = !w;
     $("#inv-spar").hidden = !S.sparOn;
   }
@@ -966,7 +974,7 @@
       h("button", { type: "button", class: "btn ghost sm", text: "Positie toevoegen", onclick: function () { var np = { id: rid("p"), naam: "", ticker: "", soort: "", waarde: "", inleg: "" }; d.push(np); $("#pf-body").replaceChildren(pfForm()); var el = document.getElementById("pf-" + np.id + "-naam"); if (el) el.focus(); } }),
       h("span", { class: "spacer" }),
       h("button", { type: "button", class: "link-btn", text: "Annuleren", onclick: function () { S.pfEdit = false; S.pfDraft = null; renderInvest(); } }),
-      h("button", { type: "submit", class: "btn sm", text: "Opslaan" })));
+      h("button", { type: "submit", class: "btn primary sm", text: "Opslaan" })));
     form.append(h("p", { class: "hint", text: "Bij opslaan komt je totale waarde van vandaag in het verloop. Ingelegd bedrag is optioneel en nodig voor je rendement." }));
     return form;
   }
@@ -987,25 +995,8 @@
     S.pfEdit = false; S.pfDraft = null;
     renderInvest(); toast("Portfolio opgeslagen.");
   }
-  function renderPlan() {
-    var plan = S.invest.plan || {}, rb = $("#route-body");
-    if (S.routeEdit) {
-      if (!rb.querySelector("textarea")) {
-        var ta = h("textarea", { id: "route-input", rows: 6, maxlength: 2000, "aria-label": "Mijn route", value: plan.route || "" });
-        rb.replaceChildren(ta, h("div", { class: "form-actions", style: "margin-top:8px;justify-content:flex-end" },
-          h("button", { class: "link-btn", type: "button", text: "Annuleren", onclick: function () { S.routeEdit = false; renderInvest(); } }),
-          h("button", { class: "btn sm", type: "button", text: "Opslaan", onclick: function () { S.routeEdit = false; savePlan({ route: ta.value.trim() }); } })));
-        ta.focus();
-      }
-    } else {
-      rb.replaceChildren(plan.route ? h("p", { class: "route", text: plan.route }) : h("p", { class: "hint", text: "Beschrijf in een paar zinnen hoe je belegt en waarom." }));
-    }
-    var ul = $("#rules"); ul.replaceChildren();
-    var regels = plan.regels || [];
-    if (!regels.length) ul.append(h("li", { class: "hint", text: "Nog geen regels." }));
-    regels.forEach(function (r) {
-      ul.append(h("li", null, h("span", { text: r.tekst }), canWrite() ? delBtn(function () { savePlan({ regels: ((S.invest.plan || {}).regels || []).filter(function (x) { return x.id !== r.id; }) }); }, "Verwijder regel", true) : null));
-    });
+  function renderMaxInput() {
+    var plan = S.invest.plan || {};
     var mi = $("#max-input"); if (document.activeElement !== mi) mi.value = plan.maxPositie ? String(plan.maxPositie) : "";
   }
   function yearMonths() {
@@ -1036,34 +1027,6 @@
     if (cur.maanden[k]) delete cur.maanden[k]; else cur.maanden[k] = true;
     S.invest.inleg = cur; queueWrite("invest/inleg", cur, 300); renderDca();
   }
-  function setScen(id, patch) {
-    var list = ((S.invest.plan || {}).scenarios || []).slice();
-    if (patch === null) list = list.filter(function (x) { return x.id !== id; });
-    else list = list.map(function (x) { return x.id === id ? Object.assign({}, x, patch) : x; });
-    savePlan({ scenarios: list });
-  }
-  function renderScen() {
-    var ul = $("#scen-list"); ul.replaceChildren();
-    var list = (S.invest.plan || {}).scenarios || [], w = canWrite();
-    if (!list.length) { ul.append(h("li", { class: "hint", style: "border:0;padding:0", text: "Nog geen scenario's." })); return; }
-    list.forEach(function (x) {
-      var hit = x.status === "geraakt";
-      ul.append(h("li", { class: hit ? "hit" : null },
-        h("div", null, h("p", null, h("span", { class: "k", text: "Als" }), h("span", { text: x.als })), h("p", null, h("span", { class: "k", text: "Dan" }), h("span", { text: x.dan }))),
-        h("div", { class: "scen-act" },
-          w ? h("button", { type: "button", class: "btn ghost sm", "aria-pressed": hit ? "true" : "false", title: "Wissel tussen actief en geraakt", text: hit ? "Geraakt" : "Actief", onclick: function () { setScen(x.id, { status: hit ? "actief" : "geraakt" }); } }) : h("span", { class: "hint", text: hit ? "Geraakt" : "Actief" }),
-          w ? delBtn(function () { setScen(x.id, null); }, "Verwijder scenario", true) : null)));
-    });
-  }
-  function renderWatch() {
-    var box = $("#watch-list"); box.replaceChildren();
-    var list = (S.invest.plan || {}).volg || [], w = canWrite();
-    if (!list.length) { box.append(h("span", { class: "hint", text: "Nog niets. Voeg toe wat je in de gaten houdt." })); return; }
-    list.forEach(function (v) {
-      box.append(h("span", { class: "wchip" }, h("span", { text: v.tekst }),
-        w ? delBtn(function () { savePlan({ volg: ((S.invest.plan || {}).volg || []).filter(function (x) { return x.id !== v.id; }) }); }, "Verwijder " + v.tekst, true) : null));
-    });
-  }
   function renderMarketLog() {
     var ul = $("#mlog-list"); ul.replaceChildren();
     var list = S.notes.filter(function (n) { return n.soort === "markt"; });
@@ -1071,6 +1034,339 @@
     list.slice(0, 40).forEach(function (n) {
       ul.append(h("li", null, h("div", { class: "note-meta" }, h("span", { text: dateOnly(n.datum) }), canWrite() ? delBtn(function () { deleteNote(n.id); }, "Verwijder marktnotitie", true) : null), h("p", { class: "note-text", text: n.tekst })));
     });
+  }
+
+  /* ================= Handelsplan ================= */
+  var HP = { busy: false };
+  var DAYS_SHORT = ["zo", "ma", "di", "wo", "do", "vr", "za"];
+  var TRIG = {
+    alarm: { k: "crit", t: "Alarm", rank: 0 },
+    letop: { k: "warn", t: "Let op", rank: 1 },
+    rustig: { k: "good", t: "Rustig", rank: 2 },
+    geen: { k: "neutral", t: "Geen cijfer", rank: 3 }
+  };
+  var CHECK_RANK = { geraakt: 0, dichtbij: 1, nognie: 2, geen: 3 };
+  var CHECK_LABEL = { geraakt: "Geraakt", dichtbij: "Dichtbij", nognie: "Nog niet", geen: "Geen cijfer" };
+  var MKT_KEYS = ["vwce", "smh", "crcl", "gold", "btc", "us10y", "realYield10", "brent", "spx", "vix", "dxy", "cpiYoY"];
+  var nfCache = {};
+  function fmtNum(v, dec) {
+    var k = String(dec);
+    if (!nfCache[k]) nfCache[k] = new Intl.NumberFormat("nl-NL", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+    return nfCache[k].format(v);
+  }
+  function guessDec(v) { var a = Math.abs(v); return a >= 1000 ? 0 : a >= 100 ? 1 : 2; }
+  function fmtItem(it, v) {
+    if (it && it.display && v === it.value) return String(it.display);
+    if (v == null || !isFinite(v)) return "–";
+    var dec = it && it.decimals != null ? Number(it.decimals) : guessDec(v);
+    return (v < 0 ? "−" : "") + ((it && it.prefix) || "") + fmtNum(Math.abs(v), dec) + ((it && it.suffix) || "");
+  }
+  function fmtUnit(v, unit, it) {
+    if (it) return fmtItem(it, v);
+    if (v == null || !isFinite(v)) return "–";
+    var s = fmtNum(Math.abs(v), guessDec(v)), neg = v < 0 ? "−" : "";
+    if (unit === "%") return neg + s + "%";
+    if (unit === "$") return neg + "$" + s;
+    if (unit === "k" || unit === "Δk") return neg + s + "k";
+    if (unit === "Δ$mld") return neg + "$" + s + " mld";
+    return neg + s;
+  }
+  function fmtStamp(iso) {
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return d.getDate() + " " + MONTHS[d.getMonth()] + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+  function hpData() { var x = S.hp || {}; return { plan: x.plan || null, markt: x.markt || null, status: x.status || null }; }
+  function hpItems() {
+    var out = {}, m = (S.hp && S.hp.markt) || {};
+    (m.items || []).forEach(function (it) { if (it && it.key) out[it.key] = it; });
+    return out;
+  }
+  function trigState(t, items) {
+    var it = t.marketKey ? items[t.marketKey] : null;
+    var v = it && typeof it.value === "number" ? it.value : (typeof t.current === "number" ? t.current : null);
+    var st = "geen";
+    if (v != null) {
+      var up = t.dir !== "down";
+      if (t.danger != null && (up ? v >= t.danger : v <= t.danger)) st = "alarm";
+      else if (t.warn != null && (up ? v >= t.warn : v <= t.warn)) st = "letop";
+      else st = "rustig";
+    }
+    return { v: v, it: it, asOf: (it && it.asOf) || t.asOf || "", st: st };
+  }
+  function checkState(c, items) {
+    var it = items[c.key], v = it && typeof it.value === "number" ? it.value : null;
+    if (v == null) return { v: null, it: it, st: "geen" };
+    var lt = c.op === "lt", hit = lt ? v < c.level : v > c.level;
+    var near = !hit && c.near != null && (lt ? v <= c.near : v >= c.near);
+    return { v: v, it: it, st: hit ? "geraakt" : near ? "dichtbij" : "nognie" };
+  }
+  function stanceTone(s) {
+    s = String(s || "").toLowerCase();
+    if (/verklein|afbouw|verkoop|verlaag/.test(s)) return "crit";
+    if (/voorzicht|afwacht|niet (extra )?bijkop|niet kopen/.test(s)) return "warn";
+    if (/bijkop|opbouw|kopen|instap/.test(s)) return "good";
+    return "neutral";
+  }
+  function riskTone(s) {
+    s = String(s || "").toLowerCase();
+    if (/crisis|zeer/.test(s)) return "crit";
+    if (/defensief|voorzicht|verhoogd/.test(s)) return "warn";
+    if (/aanval|offensief|risk-on|laag/.test(s)) return "good";
+    return "neutral";
+  }
+  function pillarTone(s) {
+    s = String(s || "").toLowerCase();
+    if (/stress|crisis|alarm/.test(s)) return "crit";
+    if (/gespannen|let op|zwak/.test(s)) return "warn";
+    if (/rustig|ok|goed|steun|gezond/.test(s)) return "good";
+    return "neutral";
+  }
+  function pill(tone, text) { return h("span", { class: "pill pill-" + tone, text: text }); }
+  function posShort(plan, id) {
+    var p = (plan.positions || []).filter(function (x) { return x.id === id; })[0];
+    return p ? (p.short || p.name) : id;
+  }
+  function upcoming(plan, n) {
+    var t = new Date(), today = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+    return (plan.calendar || []).map(function (c) { return Object.assign({ d: parseYmd(c.date) }, c); })
+      .filter(function (c) { return c.d && c.d.getTime() >= today.getTime(); })
+      .sort(function (a, b) { return a.d - b.d; }).slice(0, n);
+  }
+  async function hpSyncNow() {
+    if (HP.busy) return;
+    HP.busy = true; renderHp();
+    try {
+      await api("POST", "/api/handelsplan/sync");
+      toast("Handelsplan bijgewerkt.");
+    } catch (e) {
+      if (!e || e.code !== "auth") toast(e && e.code === "te_vaak" ? "Even wachten voor je opnieuw bijwerkt." : ((e && e.message) || "Bijwerken mislukt."));
+    } finally {
+      HP.busy = false;
+      await refreshData();
+      renderHp(); renderOvHp();
+    }
+  }
+
+  function hpConnectCard(cfg, st) {
+    var steps = [];
+    if (!cfg.url) steps.push("Open in Railway de service koersplan en zet bij Variables HANDELSPLAN_URL op het adres van je Handelsplan-site.");
+    steps.push((cfg.url ? "Open in Railway de service koersplan en zet bij Variables " : "Zet daar ook ") + "HANDELSPLAN_PASSWORD op het wachtwoord waarmee je bij Handelsplan inlogt.");
+    steps.push("Klik op Deploy als Railway daarom vraagt. Binnen een minuut staat je plan hier, daarna ververst het elke " + (cfg.minuten || 30) + " minuten.");
+    var card = h("section", { class: "panel hp-connect" },
+      h("div", { class: "panel-head" }, h("h2", { text: "Koppel je Handelsplan" })),
+      h("p", { text: "Koersplan haalt je regime, posities met niveaus, signalen, scenario's en agenda op uit Handelsplan. Je hoeft niets over te typen." }),
+      h("ol", { class: "steps" }, steps.map(function (s) { return h("li", { text: s }); })));
+    if (cfg.gekoppeld && st && st.fout) {
+      card.append(h("p", { class: "msg-err", text: st.fout }),
+        h("div", { class: "form-actions" }, h("button", { class: "btn primary sm", type: "button", text: HP.busy ? "Bezig…" : "Opnieuw proberen", disabled: HP.busy, onclick: hpSyncNow })));
+    } else if (cfg.gekoppeld) {
+      card.append(h("p", { class: "hint", text: "De koppeling staat ingesteld. Je plan wordt opgehaald…" }));
+    }
+    return card;
+  }
+  function hpStatusRow(plan, st, cfg) {
+    var meta = plan.meta || {}, parts = [];
+    parts.push("versie " + (meta.version != null ? meta.version : "?"));
+    if (meta.updatedAt) parts.push("plan bijgewerkt " + fmtStamp(meta.updatedAt));
+    if (st && st.opgehaald) parts.push("opgehaald " + fmtStamp(st.opgehaald));
+    var bad = st && st.ok === false;
+    var row = h("div", { class: "hp-status" },
+      h("div", { class: "hp-src" },
+        chip(bad ? "warn" : "good", bad ? "Laatste ophaalpoging mislukt" : "Uit Handelsplan"),
+        h("span", { class: "hint", text: parts.join(" · ") })),
+      h("div", { class: "hp-actions" },
+        h("button", { class: "btn ghost sm", type: "button", text: HP.busy ? "Bezig…" : "Nu bijwerken", disabled: HP.busy || !cfg.gekoppeld, onclick: hpSyncNow }),
+        cfg.url ? h("a", { class: "btn ghost sm", href: cfg.url, target: "_blank", rel: "noopener", text: "Open Handelsplan" }) : null));
+    if (bad && st.fout) row.append(h("p", { class: "msg-err hp-err", text: st.fout + " Je ziet de laatst opgehaalde versie." }));
+    return row;
+  }
+  function hpRegime(plan) {
+    var mac = plan.macro || {}, reg = plan.regime || {}, risk = mac.riskMode || reg.riskLevel || "";
+    var pillars = (mac.pillars || []).filter(function (p) { return p && p.name; });
+    return h("section", { class: "hp-regime" },
+      h("div", { class: "hp-regime-top" },
+        h("span", { class: "eyebrow", text: "Regime" }),
+        h("span", { class: "hp-regime-name", text: mac.regime || reg.name || "" }),
+        risk ? pill(riskTone(risk), "Houding: " + risk) : null,
+        reg.phase ? pill("neutral", reg.phase) : null),
+      h("h2", { class: "hp-headline", text: mac.headline || reg.name || "Je handelsplan" }),
+      mac.summary ? h("p", { class: "hp-summary", text: mac.summary }) : (reg.thesis ? h("p", { class: "hp-summary", text: reg.thesis }) : null),
+      reg.masterVariable && reg.masterVariable.name ? h("p", { class: "hp-master" }, h("strong", { text: "Kijk eerst naar: " + reg.masterVariable.name + ". " }), h("span", { text: reg.masterVariable.why || "" })) : null,
+      pillars.length ? h("div", { class: "hp-pillars", role: "list", "aria-label": "Pijlers" }, pillars.map(function (p) {
+        return h("span", { class: "pillar pillar-" + pillarTone(p.status), role: "listitem", title: p.reading || "" },
+          h("span", { class: "pillar-dot", "aria-hidden": "true" }), h("span", { class: "pillar-name", text: p.name }), h("span", { class: "pillar-st", text: p.status || "" }));
+      })) : null);
+  }
+  function hpDo(plan, items) {
+    var simple = plan.simple || {};
+    var card = h("section", { class: "panel hp-do" }, h("div", { class: "panel-head" }, h("h2", { text: "Wat moet ik doen" })));
+    if (simple.headline) card.append(h("p", { class: "hp-do-head", text: simple.headline }));
+    var list = h("div", { class: "pos-list" });
+    (plan.positions || []).forEach(function (p) {
+      var it = p.priceKey ? items[p.priceKey] : null;
+      var checks = (p.checks || []).map(function (c) { return Object.assign({ c: c }, checkState(c, items)); });
+      checks.sort(function (a, b) { return CHECK_RANK[a.st] - CHECK_RANK[b.st]; });
+      list.append(h("article", { class: "pos" },
+        h("div", { class: "pos-head" },
+          h("span", { class: "pos-name", text: p.short || p.name }),
+          pill(stanceTone(p.stance + " " + (p.doLabel || "")), p.doLabel || p.stance || "–"),
+          it ? h("span", { class: "pos-price", text: fmtItem(it, it.value) + (it.asOf ? " · " + it.asOf : "") }) : null),
+        p.doNow ? h("p", { class: "pos-do", text: p.doNow }) : null,
+        checks.length ? h("ul", { class: "checks" }, checks.map(function (x) {
+          return h("li", { class: "check check-" + x.st + " tone-" + (x.c.tone || "warn"), title: x.c.then || "" },
+            h("span", { class: "check-dot", "aria-hidden": "true" }),
+            h("span", { class: "check-txt" },
+              h("span", { class: "check-label", text: x.c.label || "" }),
+              h("span", { class: "check-act", text: (x.st === "geraakt" ? "Nu: " : "Dan: ") + (x.c.action || "") })),
+            h("span", { class: "check-side" },
+              h("span", { class: "check-st", text: CHECK_LABEL[x.st] }),
+              h("span", { class: "check-now", text: x.v == null ? "" : "nu " + fmtItem(x.it, x.v) })));
+        })) : null));
+    });
+    card.append(list);
+    return card;
+  }
+  function sigRow(r) {
+    var t = r.t, up = t.dir !== "down", cmp = up ? "≥ " : "≤ ", th = [];
+    if (t.warn != null) th.push("let op " + cmp + fmtUnit(t.warn, t.unit, r.it));
+    if (t.danger != null) th.push("alarm " + cmp + fmtUnit(t.danger, t.unit, r.it));
+    var thText = th.concat(r.asOf ? [r.asOf] : []).join(" · ");
+    return h("li", { class: "sig sig-" + r.st },
+      h("div", { class: "sig-main" },
+        h("span", { class: "sig-label", text: t.label }),
+        t.meaning ? h("span", { class: "sig-meaning", text: t.meaning }) : null,
+        thText ? h("span", { class: "sig-th", text: thText }) : null),
+      h("div", { class: "sig-side" },
+        h("strong", { class: "sig-val", text: fmtUnit(r.v, t.unit, r.it) }),
+        chip(TRIG[r.st].k, TRIG[r.st].t)));
+  }
+  function hpSignals(plan, items) {
+    var rows = (plan.triggers || []).map(function (t) { return Object.assign({ t: t }, trigState(t, items)); });
+    rows.sort(function (a, b) { return TRIG[a.st].rank - TRIG[b.st].rank; });
+    var hot = rows.filter(function (r) { return r.st === "alarm" || r.st === "letop"; });
+    var calm = rows.filter(function (r) { return r.st === "rustig" || r.st === "geen"; });
+    var count = function (s) { return rows.filter(function (r) { return r.st === s; }).length; };
+    var card = h("section", { class: "panel hp-signals" },
+      h("div", { class: "panel-head" }, h("h2", { text: "Signalen" }),
+        h("span", { class: "hint", text: count("alarm") + " alarm · " + count("letop") + " let op · " + count("rustig") + " rustig" })));
+    if (hot.length) card.append(h("ul", { class: "sigs" }, hot.map(sigRow)));
+    else card.append(h("p", { class: "hint", text: "Geen signalen op alarm of let op." }));
+    if (calm.length) card.append(h("details", { class: "more" }, h("summary", { text: "Rustige signalen (" + calm.length + ")" }), h("ul", { class: "sigs" }, calm.map(sigRow))));
+    return card;
+  }
+  function hpCalendar(plan) {
+    var list = upcoming(plan, 6), t = new Date(), todayKey = ymd(t);
+    var card = h("section", { class: "panel hp-cal" }, h("div", { class: "panel-head" }, h("h2", { text: "Komende momenten" })));
+    if (!list.length) { card.append(h("p", { class: "hint", text: "Geen momenten gepland." })); return card; }
+    card.append(h("ul", { class: "cal-list" }, list.map(function (c) {
+      var isToday = c.date === todayKey;
+      return h("li", { class: "cal" + (isToday ? " today" : "") },
+        h("div", { class: "cal-date", "aria-hidden": "true" }, h("span", { class: "cal-day", text: String(c.d.getDate()) }), h("span", { class: "cal-mon", text: MONTHS[c.d.getMonth()] })),
+        h("div", { class: "cal-body" },
+          h("div", { class: "cal-top" }, h("strong", { text: c.event || "" }), isToday ? pill("warn", "Vandaag") : null),
+          h("span", { class: "cal-meta", text: DAYS[c.d.getDay()] + " " + c.d.getDate() + " " + MONTHS_LONG[c.d.getMonth()] + (c.time ? " · " + c.time : "") }),
+          c.why ? h("p", { class: "cal-why", text: c.why }) : null,
+          (c.affects || []).length ? h("div", { class: "tags" }, c.affects.map(function (a) { return h("span", { class: "tag", text: posShort(plan, a) }); })) : null));
+    })));
+    return card;
+  }
+  function hpScenarios(plan) {
+    var list = (plan.scenarios || []).slice().sort(function (a, b) { return (b.prob || 0) - (a.prob || 0); });
+    var card = h("section", { class: "panel hp-scen" }, h("div", { class: "panel-head" }, h("h2", { text: "Scenario's" }), h("span", { class: "hint", text: "kansen zijn inschattingen" })));
+    card.append(h("ul", { class: "scen-list" }, list.map(function (s, i) {
+      var pr = clamp(Number(s.prob) || 0, 0, 100);
+      return h("li", { class: "scen" + (i === 0 ? " scen-first" : "") },
+        h("div", { class: "scen-top" }, h("strong", { text: s.name || "" }), h("span", { class: "scen-prob", text: pr + "%" })),
+        h("div", { class: "bar", role: "img", "aria-label": "Kans " + pr + " procent" }, h("i", { style: "width:" + pr + "%" })),
+        s.horizon ? h("span", { class: "scen-h", text: s.horizon }) : null,
+        h("details", { class: "more" }, h("summary", { text: "Wat gebeurt er en wat doe je" }),
+          s.desc ? h("p", { text: s.desc }) : null,
+          (s.actions || []).length ? h("ul", { class: "bullets" }, s.actions.map(function (a) { return h("li", { text: a }); })) : null));
+    })));
+    return card;
+  }
+  function hpRules(plan) {
+    var rules = ((plan.simple || {}).rules || []);
+    if (!rules.length) return null;
+    return h("section", { class: "panel hp-rules" }, h("div", { class: "panel-head" }, h("h2", { text: "Spelregels" })),
+      h("ol", { class: "rules-list" }, rules.map(function (r) { return h("li", { text: r }); })));
+  }
+  function mktTile(it) {
+    return h("div", { class: "mkt" },
+      h("span", { class: "mkt-label", text: it.label || it.key }),
+      h("strong", { class: "mkt-val", text: fmtItem(it, it.value) }),
+      it.change ? h("span", { class: "mkt-chg", text: it.change }) : null,
+      h("span", { class: "mkt-asof", text: [it.asOf, it.src].filter(Boolean).join(" · ") }));
+  }
+  function hpMarket(markt, items) {
+    if (!markt || !(markt.items || []).length) return null;
+    var top = MKT_KEYS.map(function (k) { return items[k]; }).filter(Boolean);
+    var card = h("section", { class: "panel hp-market" },
+      h("div", { class: "panel-head" }, h("h2", { text: "Markt" }),
+        h("span", { class: "hint", text: markt.updatedAt ? "bijgewerkt " + fmtStamp(markt.updatedAt) + (markt.updatedBy ? " · " + markt.updatedBy : "") : "" })));
+    if (markt.note) card.append(h("p", { class: "hint", style: "margin:-6px 0 12px", text: markt.note }));
+    card.append(h("div", { class: "mkt-grid" }, top.map(mktTile)));
+    var groups = {}, order = [];
+    markt.items.forEach(function (it) { var g = it.group || "Overig"; if (!groups[g]) { groups[g] = []; order.push(g); } groups[g].push(it); });
+    card.append(h("details", { class: "more" }, h("summary", { text: "Alle cijfers (" + markt.items.length + ")" }),
+      h("div", { class: "tbl-wrap" }, h("table", { class: "mkt-table" },
+        h("thead", null, h("tr", null, h("th", { text: "Cijfer" }), h("th", { text: "Waarde" }), h("th", { text: "Toelichting" }), h("th", { text: "Stand" }))),
+        h("tbody", null, order.map(function (g) {
+          return [h("tr", { class: "grp" }, h("th", { colspan: "4", text: g }))].concat(groups[g].map(function (it) {
+            return h("tr", null, h("td", { text: it.label || it.key }), h("td", { class: "n", text: fmtItem(it, it.value) }), h("td", { text: it.change || "" }), h("td", { text: it.asOf || "" }));
+          }));
+        }))))));
+    return card;
+  }
+  function renderHp() {
+    var box = $("#hp"); if (!box) return;
+    box.replaceChildren();
+    var d = hpData(), cfg = S.hpCfg || {};
+    if (!S.loaded.handelsplan) { box.append(emptyBox(S.status === "error" ? "Je gegevens konden niet worden geladen." : "Handelsplan laden…")); return; }
+    if (!d.plan) { box.append(hpConnectCard(cfg, d.status || {})); return; }
+    var plan = d.plan, items = hpItems();
+    box.append(hpStatusRow(plan, d.status || {}, cfg), hpRegime(plan));
+    box.append(h("div", { class: "hp-grid" },
+      h("div", { class: "hp-col" }, hpDo(plan, items), hpSignals(plan, items)),
+      h("div", { class: "hp-col" }, hpCalendar(plan), hpScenarios(plan), hpRules(plan))));
+    var mk = hpMarket(d.markt, items); if (mk) box.append(mk);
+    if (plan.meta && plan.meta.disclaimer) box.append(h("p", { class: "hp-disclaimer", text: plan.meta.disclaimer }));
+  }
+  function renderOvHp() {
+    var box = $("#ov-hp"); if (!box) return;
+    box.replaceChildren();
+    var d = hpData(), cfg = S.hpCfg || {};
+    var plan = d.plan, mac = (plan && plan.macro) || {}, risk = plan ? (mac.riskMode || (plan.regime || {}).riskLevel || "") : "";
+    box.append(h("div", { class: "panel-head" }, h("h2", { text: "Handelsplan" }), risk ? pill(riskTone(risk), risk) : null));
+    if (!S.loaded.handelsplan) { box.append(h("p", { class: "hint", text: "Laden…" })); return; }
+    if (!plan) {
+      var fout = cfg.gekoppeld && d.status && d.status.fout;
+      box.append(h("p", { class: "hint", text: fout ? "Ophalen lukt nog niet. Bij Beleggen zie je wat er mis is." : cfg.gekoppeld ? "Je plan wordt opgehaald." : "Nog niet gekoppeld. De stappen staan bij Beleggen." }),
+        h("a", { class: "link-btn", href: "#investeren", text: "Naar Beleggen" }));
+      return;
+    }
+    var items = hpItems(), simple = plan.simple || {};
+    if (mac.regime) box.append(h("span", { class: "eyebrow", text: mac.regime }));
+    if (simple.headline || mac.headline) box.append(h("p", { class: "hp-mini-head", text: simple.headline || mac.headline }));
+    var flags = [];
+    (plan.positions || []).forEach(function (p) {
+      (p.checks || []).forEach(function (c) {
+        var s = checkState(c, items);
+        if (s.st === "geraakt" || s.st === "dichtbij") flags.push({ rank: s.st === "geraakt" ? 0 : 1, tone: s.st === "geraakt" ? (c.tone === "bad" ? "crit" : c.tone || "warn") : "warn", text: (p.short || p.name) + ": " + (c.label || ""), side: CHECK_LABEL[s.st] });
+      });
+    });
+    (plan.triggers || []).forEach(function (t) {
+      var s = trigState(t, items);
+      if (s.st === "alarm") flags.push({ rank: 2, tone: "crit", text: t.label + " " + fmtUnit(s.v, t.unit, s.it), side: "Alarm" });
+    });
+    flags.sort(function (a, b) { return a.rank - b.rank; });
+    if (flags.length) box.append(h("ul", { class: "mini-flags" }, flags.slice(0, 4).map(function (f) {
+      return h("li", { class: "mini-flag tone-" + f.tone }, h("span", { class: "check-dot", "aria-hidden": "true" }), h("span", { text: f.text }), h("span", { class: "mini-side", text: f.side }));
+    })));
+    var next = upcoming(plan, 1)[0];
+    if (next) box.append(h("p", { class: "mini-next" }, h("span", { class: "label", text: "Volgende moment" }), h("span", { text: DAYS_SHORT[next.d.getDay()] + " " + next.d.getDate() + " " + MONTHS[next.d.getMonth()] + " · " + next.event })));
+    box.append(h("a", { class: "link-btn", href: "#investeren", text: "Naar je plan" }));
   }
 
   /* ================= Grafieken ================= */
@@ -1286,6 +1582,7 @@
   function renderAll(force) {
     renderHeader();
     renderOverview();
+    renderOvHp();
     renderGoals(force);
     renderNotes();
     renderInvest();
@@ -1332,6 +1629,7 @@
       S.loaded.notities = true; renderNotes(); renderMarketLog();
     }, err);
     S.db.collection("invest").onSnapshot(function (snap) { mergeDocs("invest", snap, S.invest); S.loaded.invest = true; renderInvest(); }, err);
+    S.db.collection("handelsplan").onSnapshot(function (snap) { mergeDocs("handelsplan", snap, S.hp); S.loaded.handelsplan = true; renderHp(); renderOvHp(); }, err);
     S.db.doc("instellingen/algemeen").onSnapshot(function (d) {
       if (!S.dirty.has("instellingen/algemeen")) S.settings = d.exists ? clone(d.data()) || {} : {};
       S.loaded.instellingen = true; renderAll();
@@ -1357,27 +1655,12 @@
     $("#spar-stop").addEventListener("click", function () { if (S.chat.ctl) S.chat.ctl.abort(); });
     $("#spar-new").addEventListener("click", function () { if (S.chat.ctl) S.chat.ctl.abort(); S.chat.turns = []; $("#spar-log").replaceChildren(); $("#spar-input").focus(); });
     $("#pf-edit").addEventListener("click", function () { S.pfEdit = true; S.pfDraft = null; renderPortfolio(); var f = $("#pf-body input"); if (f) f.focus(); });
-    $("#route-edit").addEventListener("click", function () { S.routeEdit = true; renderInvest(); });
-    $("#rule-form").addEventListener("submit", function (e) {
-      e.preventDefault(); var i = $("#rule-input"), t = i.value.trim(); if (!t) return;
-      savePlan({ regels: ((S.invest.plan || {}).regels || []).concat([{ id: rid("r"), tekst: t.slice(0, 160) }]) }); i.value = ""; i.focus();
-    });
     $("#max-input").addEventListener("change", function (e) { var v = Math.round(Number(e.target.value)); savePlan({ maxPositie: isFinite(v) && v > 0 && v <= 100 ? v : null }); });
-    $("#scen-form").addEventListener("submit", function (e) {
-      e.preventDefault(); var a = $("#scen-als"), d = $("#scen-dan");
-      if (!a.value.trim() || !d.value.trim()) { toast("Vul zowel 'als' als 'dan' in."); return; }
-      savePlan({ scenarios: ((S.invest.plan || {}).scenarios || []).concat([{ id: rid("s"), als: a.value.trim().slice(0, 200), dan: d.value.trim().slice(0, 200), status: "actief" }]) });
-      a.value = ""; d.value = ""; a.focus();
-    });
-    $("#watch-form").addEventListener("submit", function (e) {
-      e.preventDefault(); var i = $("#watch-input"), t = i.value.trim(); if (!t) return;
-      savePlan({ volg: ((S.invest.plan || {}).volg || []).concat([{ id: rid("v"), tekst: t.slice(0, 60) }]) }); i.value = ""; i.focus();
-    });
     $("#mlog-form").addEventListener("submit", function (e) {
       e.preventDefault(); var ta = $("#mlog-text"), t = ta.value.trim(); if (!t) { ta.focus(); return; }
       addNote(t, "markt", null); ta.value = "";
     });
-    $("#inv-spar").addEventListener("click", function () { sparAbout("Kijk naar mijn investeringsroute, regels en scenario's. Wat is onduidelijk, wat ontbreekt, en waar handel ik niet volgens mijn eigen plan? "); });
+    $("#inv-spar").addEventListener("click", function () { sparAbout("Kijk naar mijn handelsplan en mijn eigen portfolio. Past mijn verdeling bij wat mijn plan zegt, en waar handel ik niet volgens mijn eigen spelregels? "); });
     $("#start-form").addEventListener("submit", function (e) {
       e.preventDefault(); var d = parseYmd($("#start-input").value);
       if (!d) { toast("Kies een geldige datum."); return; }
@@ -1395,7 +1678,7 @@
   }
 
   /* ================= Verbinding met de server ================= */
-  var COLLS = ["doelen", "weken", "notities", "invest", "instellingen"];
+  var COLLS = ["doelen", "weken", "notities", "invest", "instellingen", "handelsplan"];
   async function api(method, url, body, signal) {
     var opts = { method: method, credentials: "same-origin", headers: { "X-Koersplan": "1" }, signal: signal };
     if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
@@ -1493,6 +1776,7 @@
       var cfg = await api("GET", "/api/config");
       S.sparOn = !!cfg.spar;
       S.toolsOk = S.sparOn;
+      S.hpCfg = cfg.handelsplan || {};
     } catch (e) {
       if (e && e.code === "auth") return;
     }

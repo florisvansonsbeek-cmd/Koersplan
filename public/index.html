@@ -4,255 +4,252 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex">
-<meta name="theme-color" content="#f3f5f6" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0e1419" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#0f1923">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Koersplan">
 <title>Koersplan</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="preload" href="/fonts/bricolage-grotesque-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/app.css">
 <script src="/app.js" defer></script>
 </head>
 <body>
-
 <header class="top">
   <div class="top-in">
-    <div class="brand"><span class="brand-name">Koersplan</span><span class="brand-year" id="brand-year"></span></div>
+    <a class="brand" href="#overzicht" aria-label="Koersplan, naar overzicht">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">Koersplan</span>
+      <span class="brand-year" id="brand-year"></span>
+    </a>
     <nav class="tabs" aria-label="Onderdelen">
       <a class="tab" id="tab-overzicht" href="#overzicht">Overzicht</a>
       <a class="tab" id="tab-doelen" href="#doelen">Doelen</a>
-      <a class="tab" id="tab-investeren" href="#investeren">Investeren</a>
+      <a class="tab" id="tab-investeren" href="#investeren">Beleggen</a>
       <a class="tab" id="tab-jaar" href="#jaar">Jaar</a>
     </nav>
   </div>
 </header>
 <div class="banner" id="banner" hidden><p id="banner-text"></p></div>
 
-<main class="wrap">
+<main>
   <!-- ===== Overzicht ===== -->
   <section class="view" id="v-overzicht" aria-labelledby="tab-overzicht">
-    <div class="ov-head">
-      <p class="greet" id="ov-greet">Welkom terug.</p>
-      <div>
-        <div class="weeknav">
-          <button class="icon-btn" id="ov-prev" type="button" aria-label="Vorige week"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-          <div class="weeklabel"><span class="wk" id="ov-wk">Week</span><span class="wkdates" id="ov-dates"></span></div>
-          <button class="icon-btn" id="ov-next" type="button" aria-label="Volgende week"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <div class="band-hero">
+      <div class="wrap">
+        <div class="ov-head">
+          <p class="greet" id="ov-greet">Welkom terug.</p>
+          <div class="weeknav-wrap">
+            <div class="weeknav">
+              <button class="icon-btn" id="ov-prev" type="button" aria-label="Vorige week"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+              <div class="weeklabel"><span class="wk" id="ov-wk">Week</span><span class="wkdates" id="ov-dates"></span></div>
+              <button class="icon-btn" id="ov-next" type="button" aria-label="Volgende week"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            </div>
+            <button class="link-btn today-link" id="ov-today" type="button" hidden>Terug naar deze week</button>
+          </div>
         </div>
-        <button class="link-btn today-link" id="ov-today" type="button" hidden>Terug naar deze week</button>
+
+        <div class="hero">
+          <div class="hero-num" aria-hidden="true"><span id="ov-score">–</span><span class="pct">%</span></div>
+          <div class="hero-side">
+            <span class="hero-cap">Effectiviteit deze week</span>
+            <span id="ov-chip"></span>
+            <p class="hero-note" id="ov-note">Je score verschijnt zodra je doelen geladen zijn.</p>
+            <p class="hero-sub" id="ov-sub"></p>
+          </div>
+        </div>
+
+        <div class="ruler" id="ov-ruler" role="img" aria-label="Nog geen weekscore">
+          <div class="ruler-layer ruler-track"></div>
+          <div class="ruler-layer ruler-fill"></div>
+          <div class="ruler-pace" id="ov-pace" hidden><span>tempo</span></div>
+        </div>
+        <div class="ruler-ends" aria-hidden="true"><span>0</span><span>100</span></div>
       </div>
     </div>
 
-    <div class="hero">
-      <div class="hero-num" aria-hidden="true"><span id="ov-score">–</span><span class="pct">%</span></div>
-      <div class="hero-side">
-        <span class="hero-cap">Effectiviteit deze week</span>
-        <span id="ov-chip"></span>
-        <p class="hero-note" id="ov-note">Je score verschijnt zodra je doelen geladen zijn.</p>
-        <p class="hero-sub" id="ov-sub"></p>
+    <div class="wrap">
+      <div class="ov-grid">
+        <div class="ov-main">
+          <div class="sec-head">
+            <h2 class="sec-title">Afvinken</h2>
+            <p class="hint">Tik een vakje aan voor elke keer dat je het deed. Je score is het gemiddelde van al je doelen.</p>
+          </div>
+          <div class="ov-list" id="ov-list"></div>
+          <div class="panel reflect">
+            <label for="ov-reflect" class="label">Weekreflectie</label>
+            <textarea id="ov-reflect" rows="3" placeholder="Wat ging goed? Wat stuur je volgende week bij?"></textarea>
+            <div class="reflect-foot"><span class="hint">Claude leest je reflecties mee als je spart.</span><span class="saved" id="ov-reflect-state" aria-live="polite"></span></div>
+          </div>
+        </div>
+        <aside class="ov-side">
+          <section class="panel hp-mini" id="ov-hp" aria-label="Handelsplan in het kort"></section>
+        </aside>
       </div>
-    </div>
-
-    <div class="ruler" id="ov-ruler" role="img" aria-label="Nog geen weekscore">
-      <div class="ruler-layer ruler-track"></div>
-      <div class="ruler-layer ruler-fill"></div>
-      <div class="ruler-pace" id="ov-pace" hidden><span>tempo</span></div>
-    </div>
-    <div class="ruler-ends" aria-hidden="true"><span>0</span><span>100</span></div>
-
-    <h2 class="sec-title">Afvinken</h2>
-    <p class="hint">Tik een vakje aan voor elke keer dat je het deed. Je score is het gemiddelde van al je doelen.</p>
-    <div class="ov-list" id="ov-list"></div>
-
-    <div class="reflect">
-      <label for="ov-reflect" class="label">Weekreflectie</label>
-      <textarea id="ov-reflect" rows="3" placeholder="Wat ging goed? Wat stuur je volgende week bij?"></textarea>
-      <div class="reflect-foot"><span class="hint">Claude leest je reflecties mee als je spart.</span><span class="saved" id="ov-reflect-state" aria-live="polite"></span></div>
     </div>
   </section>
 
   <!-- ===== Doelen ===== -->
   <section class="view" id="v-doelen" aria-labelledby="tab-doelen" hidden>
-    <div class="view-head">
-      <h1>Doelen voor dit jaar</h1>
-      <p class="lede">Wat je wilt bereiken, waarom het je klaarmaakt voor later, en wat je er elke week voor doet.</p>
-    </div>
-    <div class="concept-note" id="g-concept" hidden>
-      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 7.2v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="4.9" r=".95" fill="currentColor"/></svg>
-      <p>Dit zijn startdoelen die Claude voor je heeft opgesteld. Maak ze van jezelf: pas aan, schrap wat niet klopt en voeg toe wat mist. Drie tot vijf doelen werkt meestal beter dan zes.</p>
-    </div>
-    <div class="split">
-      <div class="col-main">
-        <div class="g-list" id="g-list"></div>
-        <button class="btn" id="g-add" type="button">Nieuw doel</button>
+    <div class="wrap">
+      <div class="view-head">
+        <h1>Doelen voor dit jaar</h1>
+        <p class="lede">Wat je wilt bereiken, waarom het je klaarmaakt voor later, en wat je er elke week voor doet.</p>
       </div>
-      <aside class="col-side">
-        <section class="panel spar" id="spar" aria-labelledby="spar-title">
-          <div class="panel-head"><h2 id="spar-title">Sparren over je toekomst</h2></div>
-          <p class="hint">Claude ziet je doelen, weekscores, reflecties en logboek. Voorstellen voor wijzigingen pas je zelf toe.</p>
-          <div class="spar-sugs" id="spar-sugs"></div>
-          <div class="spar-log" id="spar-log" aria-live="polite"></div>
-          <form class="spar-form" id="spar-form">
-            <label for="spar-input" class="sr">Bericht aan Claude</label>
-            <textarea id="spar-input" rows="3" placeholder="Vraag iets over je doelen, je week of je plannen"></textarea>
-            <div class="spar-actions">
-              <button type="button" class="link-btn" id="spar-new">Nieuw gesprek</button>
-              <button type="button" class="btn ghost sm" id="spar-stop" hidden>Stop</button>
-              <button type="submit" class="btn sm" id="spar-send">Verstuur</button>
-            </div>
-          </form>
-          <p class="spar-off" id="spar-off" hidden></p>
-        </section>
-        <section class="panel" aria-labelledby="log-title">
-          <div class="panel-head"><h2 id="log-title">Logboek</h2></div>
-          <form id="note-form" class="note-form">
-            <label for="note-text" class="sr">Notitie</label>
-            <textarea id="note-text" rows="2" placeholder="Leg iets vast: een inzicht, gesprek of besluit"></textarea>
-            <div class="note-row">
-              <label for="note-goal" class="sr">Hoort bij doel</label>
-              <select id="note-goal"></select>
-              <button class="btn sm" type="submit">Opslaan</button>
-            </div>
-          </form>
-          <ul class="notes" id="note-list"></ul>
-        </section>
-      </aside>
+      <div class="concept-note" id="g-concept" hidden>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 7.2v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="4.9" r=".95" fill="currentColor"/></svg>
+        <p>Een deel van je doelen is nog de startversie die Claude voor je opstelde. Maak ze van jezelf: pas aan, schrap wat niet klopt en voeg toe wat mist. Drie tot vijf doelen werkt meestal beter dan zes.</p>
+      </div>
+      <div class="split">
+        <div class="col-main">
+          <div class="g-list" id="g-list"></div>
+          <button class="btn primary" id="g-add" type="button">Nieuw doel</button>
+        </div>
+        <aside class="col-side">
+          <section class="panel spar" id="spar" aria-labelledby="spar-title">
+            <div class="panel-head"><h2 id="spar-title">Sparren over je toekomst</h2></div>
+            <p class="hint">Claude ziet je doelen, weekscores, reflecties, logboek en je handelsplan. Voorstellen voor wijzigingen pas je zelf toe.</p>
+            <div class="spar-sugs" id="spar-sugs"></div>
+            <div class="spar-log" id="spar-log" aria-live="polite"></div>
+            <form class="spar-form" id="spar-form">
+              <label for="spar-input" class="sr">Bericht aan Claude</label>
+              <textarea id="spar-input" rows="3" placeholder="Vraag iets over je doelen, je week of je plannen"></textarea>
+              <div class="spar-actions">
+                <button type="button" class="link-btn" id="spar-new">Nieuw gesprek</button>
+                <button type="button" class="btn ghost sm" id="spar-stop" hidden>Stop</button>
+                <button type="submit" class="btn primary sm" id="spar-send">Verstuur</button>
+              </div>
+            </form>
+            <p class="spar-off" id="spar-off" hidden></p>
+          </section>
+          <section class="panel" aria-labelledby="log-title">
+            <div class="panel-head"><h2 id="log-title">Logboek</h2></div>
+            <form id="note-form" class="note-form">
+              <label for="note-text" class="sr">Notitie</label>
+              <textarea id="note-text" rows="2" placeholder="Leg iets vast: een inzicht, gesprek of besluit"></textarea>
+              <div class="note-row">
+                <label for="note-goal" class="sr">Hoort bij doel</label>
+                <select id="note-goal"></select>
+                <button class="btn primary sm" type="submit">Opslaan</button>
+              </div>
+            </form>
+            <ul class="notes" id="note-list"></ul>
+          </section>
+        </aside>
+      </div>
     </div>
   </section>
 
-  <!-- ===== Investeren ===== -->
+  <!-- ===== Beleggen ===== -->
   <section class="view" id="v-investeren" aria-labelledby="tab-investeren" hidden>
-    <div class="view-head">
-      <h1>Investeringsroute</h1>
-      <p class="lede">Je portfolio, je eigen route, regels en scenario's. Deze pagina kent geen live koersen en geeft geen koop- of verkoopadvies: wat je doet volgt uit je eigen plan.</p>
-    </div>
-    <div class="inv-grid">
-      <section class="panel" aria-labelledby="pf-title">
-        <div class="panel-head"><h2 id="pf-title">Portfolio</h2><button class="btn ghost sm" id="pf-edit" type="button">Waardes bijwerken</button></div>
-        <div id="pf-body"></div>
-      </section>
-      <section class="panel" aria-labelledby="hist-title">
-        <div class="panel-head"><h2 id="hist-title">Totale waarde</h2><span class="hint" id="hist-note"></span></div>
-        <div class="chart" id="h-chart"></div>
-      </section>
-      <section class="panel" aria-labelledby="route-title">
-        <div class="panel-head"><h2 id="route-title">Mijn route</h2><button class="btn ghost sm" id="route-edit" type="button">Bewerken</button></div>
-        <div id="route-body"></div>
-        <h3 class="sub">Regels</h3>
-        <ul class="rules" id="rules"></ul>
-        <form class="add" id="rule-form">
-          <label class="sr" for="rule-input">Nieuwe regel</label>
-          <input id="rule-input" type="text" maxlength="160" placeholder="Nieuwe regel">
-          <button class="btn sm" type="submit">Toevoegen</button>
-        </form>
-        <div class="maxpos">
-          <label class="label" for="max-input">Maximaal per positie</label>
-          <div class="inline"><input id="max-input" type="number" min="1" max="100" step="1" inputmode="numeric" placeholder="bijv. 30"><span>%</span></div>
-          <span class="hint">Posities boven dit percentage krijgen een markering in je portfolio.</span>
-        </div>
-      </section>
-      <section class="panel" aria-labelledby="dca-title">
-        <div class="panel-head"><h2 id="dca-title">Inleg per maand</h2><span class="hint" id="dca-sum"></span></div>
-        <div class="months" id="months"></div>
-        <p class="hint" style="margin-top:10px">Tik een maand aan zodra je die maand hebt ingelegd.</p>
-      </section>
-      <section class="panel" aria-labelledby="scen-title">
-        <div class="panel-head"><h2 id="scen-title">Scenario's</h2></div>
-        <p class="hint" style="margin:-6px 0 12px">Leg vooraf vast wat je doet als iets gebeurt. Dan beslis je niet op gevoel.</p>
-        <ul class="scen" id="scen-list"></ul>
-        <form class="scen-form" id="scen-form">
-          <div class="field"><label for="scen-als">Als</label><input id="scen-als" type="text" maxlength="200" placeholder="bijv. de Fed de rente twee keer verlaagt"></div>
-          <div class="field"><label for="scen-dan">Dan</label><input id="scen-dan" type="text" maxlength="200" placeholder="wat je dan doet"></div>
-          <div class="form-actions"><button class="btn sm" type="submit">Scenario toevoegen</button></div>
-        </form>
-      </section>
-      <section class="panel" aria-labelledby="watch-title">
-        <div class="panel-head"><h2 id="watch-title">Wat ik volg</h2></div>
-        <div class="chips" id="watch-list"></div>
-        <form class="add" id="watch-form">
-          <label class="sr" for="watch-input">Onderwerp toevoegen</label>
-          <input id="watch-input" type="text" maxlength="60" placeholder="Onderwerp toevoegen">
-          <button class="btn sm" type="submit">Toevoegen</button>
-        </form>
-      </section>
-      <section class="panel wide" aria-labelledby="mlog-title">
-        <div class="panel-head"><h2 id="mlog-title">Marktlogboek</h2></div>
-        <form class="note-form" id="mlog-form">
-          <label for="mlog-text" class="sr">Marktnotitie</label>
-          <textarea id="mlog-text" rows="2" placeholder="Wat zie je in de markt, en raakt het een van je scenario's?"></textarea>
-          <div class="form-actions" style="justify-content:flex-end"><button class="btn sm" type="submit">Opslaan</button></div>
-        </form>
-        <ul class="mlog" id="mlog-list"></ul>
-      </section>
-    </div>
-    <div class="inv-foot">
-      <button class="btn ghost" id="inv-spar" type="button">Bespreek je plan met Claude</button>
+    <div class="wrap">
+      <div class="view-head">
+        <h1>Beleggen</h1>
+        <p class="lede">Je handelsplan uit Handelsplan, met daaronder je eigen portfolio, inleg en marktlogboek. Geen koop- of verkoopadvies: wat je doet volgt uit je eigen plan en regels.</p>
+      </div>
+
+      <div class="hp" id="hp"></div>
+
+      <div class="sec-head"><h2 class="sec-title">Mijn portfolio</h2></div>
+      <div class="inv-grid">
+        <section class="panel" aria-labelledby="pf-title">
+          <div class="panel-head"><h2 id="pf-title">Verdeling</h2><button class="btn ghost sm" id="pf-edit" type="button">Waardes bijwerken</button></div>
+          <div id="pf-body"></div>
+          <div class="maxpos">
+            <label class="label" for="max-input">Maximaal per positie</label>
+            <div class="inline"><input id="max-input" type="number" min="1" max="100" step="1" inputmode="numeric" placeholder="bijv. 30"><span>%</span></div>
+            <span class="hint">Je handelsplan zegt: bepaal per positie een maximum. Posities daarboven krijgen een markering.</span>
+          </div>
+        </section>
+        <section class="panel" aria-labelledby="hist-title">
+          <div class="panel-head"><h2 id="hist-title">Totale waarde</h2><span class="hint" id="hist-note"></span></div>
+          <div class="chart" id="h-chart"></div>
+        </section>
+        <section class="panel" aria-labelledby="dca-title">
+          <div class="panel-head"><h2 id="dca-title">Inleg per maand</h2><span class="hint" id="dca-sum"></span></div>
+          <div class="months" id="months"></div>
+          <p class="hint" style="margin-top:10px">Tik een maand aan zodra je die maand hebt ingelegd.</p>
+        </section>
+        <section class="panel" aria-labelledby="mlog-title">
+          <div class="panel-head"><h2 id="mlog-title">Marktlogboek</h2></div>
+          <form class="note-form" id="mlog-form">
+            <label for="mlog-text" class="sr">Marktnotitie</label>
+            <textarea id="mlog-text" rows="2" placeholder="Wat zie je in de markt, en raakt het een niveau uit je plan?"></textarea>
+            <div class="form-actions" style="justify-content:flex-end"><button class="btn primary sm" type="submit">Opslaan</button></div>
+          </form>
+          <ul class="mlog" id="mlog-list"></ul>
+        </section>
+      </div>
+      <div class="inv-foot">
+        <button class="btn ghost" id="inv-spar" type="button">Bespreek je plan met Claude</button>
+      </div>
     </div>
   </section>
 
   <!-- ===== Jaar ===== -->
   <section class="view" id="v-jaar" aria-labelledby="tab-jaar" hidden>
-    <div class="view-head">
-      <h1>Je jaar, week voor week</h1>
-      <p class="lede" id="y-range"></p>
-    </div>
-    <div class="stats" id="y-stats"></div>
-    <div class="year-stack">
-      <section class="panel" aria-labelledby="yg-title">
-        <div class="panel-head"><h2 id="yg-title">Jaaragenda</h2>
-          <div class="legend" aria-label="Legenda">
-            <span><i class="sw" style="background:var(--q0)"></i>0–19</span>
-            <span><i class="sw" style="background:var(--q1)"></i>20–39</span>
-            <span><i class="sw" style="background:var(--q2)"></i>40–59</span>
-            <span><i class="sw" style="background:var(--q3)"></i>60–79</span>
-            <span><i class="sw" style="background:var(--q4)"></i>80–100</span>
-            <span><i class="sw" style="background:var(--none)"></i>niet ingevuld</span>
+    <div class="wrap">
+      <div class="view-head">
+        <h1>Je jaar, week voor week</h1>
+        <p class="lede" id="y-range"></p>
+      </div>
+      <div class="stats" id="y-stats"></div>
+      <div class="year-stack">
+        <section class="panel" aria-labelledby="yg-title">
+          <div class="panel-head"><h2 id="yg-title">Jaaragenda</h2>
+            <div class="legend" aria-label="Legenda">
+              <span><i class="sw" style="background:var(--q0)"></i>0–19</span>
+              <span><i class="sw" style="background:var(--q1)"></i>20–39</span>
+              <span><i class="sw" style="background:var(--q2)"></i>40–59</span>
+              <span><i class="sw" style="background:var(--q3)"></i>60–79</span>
+              <span><i class="sw" style="background:var(--q4)"></i>80–100</span>
+              <span><i class="sw" style="background:var(--none)"></i>niet ingevuld</span>
+            </div>
           </div>
-        </div>
-        <div class="ygrid" id="y-grid"></div>
-      </section>
-      <section class="panel" aria-labelledby="yc-title">
-        <div class="panel-head"><h2 id="yc-title">Verloop per week</h2>
-          <div class="legend">
-            <span><i class="sw" style="background:var(--s1)"></i>Weekscore</span>
-            <span><i class="ln" style="background:var(--s2)"></i>Gemiddelde 4 weken</span>
-            <span><i class="ln dash"></i>Op koers vanaf 60%</span>
+          <div class="ygrid" id="y-grid"></div>
+        </section>
+        <section class="panel" aria-labelledby="yc-title">
+          <div class="panel-head"><h2 id="yc-title">Verloop per week</h2>
+            <div class="legend">
+              <span><i class="sw" style="background:var(--s1)"></i>Weekscore</span>
+              <span><i class="ln" style="background:var(--s2)"></i>Gemiddelde 4 weken</span>
+              <span><i class="ln dash"></i>Op koers vanaf 60%</span>
+            </div>
           </div>
+          <div class="chart" id="y-chart"></div>
+          <details class="tbl"><summary>Toon als tabel</summary><div class="tbl-wrap" id="y-table"></div></details>
+        </section>
+        <section class="panel" aria-labelledby="yp-title">
+          <div class="panel-head"><h2 id="yp-title">Per doel, laatste 4 weken</h2></div>
+          <div class="pg" id="y-goals"></div>
+        </section>
+        <div class="two-col">
+          <section class="panel" aria-labelledby="ys-title">
+            <div class="panel-head"><h2 id="ys-title">Startweek van je jaar</h2></div>
+            <p class="hint" style="margin-bottom:10px">Je jaar telt 52 weken vanaf de week die je kiest. Kies 4 januari 2027 voor kalenderjaar 2027. Je weekscores blijven bewaard.</p>
+            <form class="add start-form" id="start-form">
+              <label class="sr" for="start-input">Startdatum</label>
+              <input id="start-input" type="date">
+              <button class="btn primary sm" type="submit">Opslaan</button>
+            </form>
+          </section>
+          <section class="panel" aria-labelledby="ya-title">
+            <div class="panel-head"><h2 id="ya-title">Gegevens en account</h2></div>
+            <p class="hint" style="margin-bottom:12px">Alles staat in je eigen Postgres-database op Railway. Download af en toe een back-up voor de zekerheid.</p>
+            <div class="form-actions">
+              <a class="btn ghost sm" href="/api/export">Back-up downloaden</a>
+              <form method="post" action="/logout"><button class="btn ghost sm" type="submit">Uitloggen</button></form>
+            </div>
+          </section>
         </div>
-        <div class="chart" id="y-chart"></div>
-        <details class="tbl"><summary>Toon als tabel</summary><div class="tbl-wrap" id="y-table"></div></details>
-      </section>
-      <section class="panel" aria-labelledby="yp-title">
-        <div class="panel-head"><h2 id="yp-title">Per doel, laatste 4 weken</h2></div>
-        <div class="pg" id="y-goals"></div>
-      </section>
-      <section class="panel" aria-labelledby="ys-title">
-        <div class="panel-head"><h2 id="ys-title">Startweek van je jaar</h2></div>
-        <p class="hint" style="margin-bottom:10px">Je jaar telt 52 weken vanaf de week die je kiest. Kies 4 januari 2027 voor kalenderjaar 2027. Je weekscores blijven bewaard.</p>
-        <form class="add start-form" id="start-form">
-          <label class="sr" for="start-input">Startdatum</label>
-          <input id="start-input" type="date">
-          <button class="btn sm" type="submit">Opslaan</button>
-        </form>
-      </section>
-      <section class="panel" aria-labelledby="ya-title">
-        <div class="panel-head"><h2 id="ya-title">Gegevens en account</h2></div>
-        <p class="hint" style="margin-bottom:12px">Alles staat in je eigen Postgres-database op Railway. Download af en toe een back-up voor de zekerheid.</p>
-        <div class="form-actions">
-          <a class="btn ghost sm" href="/api/export">Back-up downloaden</a>
-          <form method="post" action="/logout"><button class="btn ghost sm" type="submit">Uitloggen</button></form>
-        </div>
-      </section>
+      </div>
     </div>
   </section>
 </main>
 
 <div id="tip" class="tip" role="tooltip" hidden></div>
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-
 </body>
 </html>
