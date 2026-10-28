@@ -87,6 +87,41 @@ async function loadSessionKey() {
   sessionKey = crypto.createHash("sha256").update(secret + "\u0000" + APP_PASSWORD).digest();
 }
 
+/* Eenmalige import van doelen via de variabele DOELEN_IMPORT (JSON: {"doelen": {id: doel}}).
+   Vervangt alle doelen; de oude komen als back-up in app_meta. Elke inhoud wordt maar één keer toegepast. */
+async function importDoelenIfNeeded() {
+  const raw = process.env.DOELEN_IMPORT;
+  if (!raw) return;
+  let doelen;
+  try { doelen = JSON.parse(raw).doelen; } catch (e) { log("DOELEN_IMPORT is geen geldige JSON:", e.message); return; }
+  if (!doelen || typeof doelen !== "object" || Array.isArray(doelen)) { log("DOELEN_IMPORT mist een object 'doelen'"); return; }
+  const key = "doelen_import_" + crypto.createHash("sha256").update(raw).digest("hex").slice(0, 16);
+  const done = await pool.query("SELECT 1 FROM app_meta WHERE sleutel = $1", [key]);
+  if (done.rowCount) return;
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    const old = await c.query("SELECT id, data FROM doelen");
+    await c.query("INSERT INTO app_meta (sleutel, waarde) VALUES ($1, $2) ON CONFLICT (sleutel) DO NOTHING",
+      ["doelen_backup_" + new Date().toISOString(), JSON.stringify(old.rows)]);
+    await c.query("DELETE FROM doelen");
+    let n = 0;
+    for (const [id, data] of Object.entries(doelen)) {
+      if (!ID_RE.test(id) || !data || typeof data !== "object" || Array.isArray(data)) continue;
+      await c.query("INSERT INTO doelen (id, data, bijgewerkt) VALUES ($1, $2::jsonb, now())", [id, JSON.stringify(data)]);
+      n++;
+    }
+    await c.query("INSERT INTO app_meta (sleutel, waarde) VALUES ($1, $2)", [key, new Date().toISOString()]);
+    await c.query("COMMIT");
+    log(`Doelen geïmporteerd: ${n} (oude ${old.rowCount} bewaard als back-up)`);
+  } catch (e) {
+    await c.query("ROLLBACK").catch(() => {});
+    log("Doelen importeren mislukt:", e.message);
+  } finally {
+    c.release();
+  }
+}
+
 async function seedIfNeeded() {
   const done = await pool.query("SELECT 1 FROM app_meta WHERE sleutel = 'startdata_geladen'");
   if (done.rowCount) return;
@@ -136,6 +171,7 @@ function initDb() {
         await migrate();
         await loadSessionKey();
         await seedIfNeeded();
+        await importDoelenIfNeeded();
         dbReady = true;
         dbError = "";
         log("Database klaar");

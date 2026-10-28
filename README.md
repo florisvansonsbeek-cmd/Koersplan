@@ -39,6 +39,10 @@ Koersplan leest je plan uit Handelsplan; het schrijft er niets in terug.
 - Een kopie komt in de tabel `handelsplan`. Die is in Koersplan alleen-lezen. Lukt het ophalen even niet, dan zie je de laatst opgehaalde versie met een melding erbij.
 - Je plan aanpassen doe je in Handelsplan zelf. Verander je daar je wachtwoord, pas dan ook `HANDELSPLAN_PASSWORD` aan.
 
+## Doelen in één keer vervangen
+
+Zet bij Variables `DOELEN_IMPORT` op JSON in de vorm `{"doelen": {"id": {titel, categorie, waarom, resultaat, deadline, acties, mijlpalen, volgorde}}}`. Bij de volgende start vervangt de app al je doelen door deze lijst. De oude doelen komen als back-up in `app_meta`. Dezelfde inhoud wordt maar één keer toegepast, dus de variabele mag blijven staan. Je weekscores van afgelopen weken blijven bewaard.
+
 ## Je gegevens in Postgres
 
 | Tabel | Inhoud |
