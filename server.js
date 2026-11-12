@@ -233,11 +233,18 @@ function passwordOk(input) {
   return crypto.timingSafeEqual(a, b);
 }
 
+// Een pincode (4 tot 8 cijfers) is snel te raden, dus dan gelden strengere grenzen:
+// per IP-adres 5 foute pogingen per kwartier, en voor alle adressen samen 20 per uur.
+const PIN_MODE = /^\d{4,8}$/.test(APP_PASSWORD);
+const PER_IP_MAX = PIN_MODE ? 5 : 8;
+const GLOBAL_MAX = PIN_MODE ? 20 : 60;
 const attempts = new Map();
+let globalFails = { n: 0, reset: 0 };
 function clientIp(req) { return String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "?").split(",")[0].trim(); }
+function globalBlocked() { return globalFails.reset > Date.now() && globalFails.n >= GLOBAL_MAX; }
 function blocked(ip) {
   const a = attempts.get(ip);
-  return !!a && a.reset > Date.now() && a.n >= 8;
+  return !!a && a.reset > Date.now() && a.n >= PER_IP_MAX;
 }
 function noteFailure(ip) {
   const now = Date.now();
@@ -245,6 +252,9 @@ function noteFailure(ip) {
   if (!a || a.reset < now) attempts.set(ip, { n: 1, reset: now + 15 * 60e3 });
   else a.n++;
   if (attempts.size > 5000) attempts.clear();
+  if (globalFails.reset < now) globalFails = { n: 1, reset: now + 60 * 60e3 };
+  else globalFails.n++;
+  if (globalFails.n === GLOBAL_MAX) log(`Inloggen tijdelijk dicht: ${GLOBAL_MAX} foute pogingen in het afgelopen uur.`);
 }
 
 /* ---------------- HTTP-hulpjes ---------------- */
@@ -442,6 +452,7 @@ main { width: 100%; max-width: 380px; }
 form { background: var(--band-2); border: 1px solid var(--line); border-radius: 12px; padding: 22px 20px; }
 label { display: block; font: 500 11px/1.2 "IBM Plex Mono", ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
 input { width: 100%; font: inherit; font-size: 16px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--band); color: var(--ink); }
+input.pin { font: 500 28px/1 "IBM Plex Mono", ui-monospace, monospace; letter-spacing: .5em; text-align: center; padding: 12px 0 12px .5em; }
 input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 button { margin-top: 14px; width: 100%; font-family: inherit; font-weight: 600; font-size: 15px; line-height: 1; padding: 12px; border: 0; border-radius: 9px; background: var(--accent); color: #141006; cursor: pointer; }
 button:hover { background: var(--accent-2); }
@@ -457,8 +468,8 @@ button:disabled { opacity: .45; cursor: default; }
   <div class="gauge" aria-hidden="true"></div>
   <form method="post" action="/login">
     ${message ? `<p class="msg" role="alert">${esc(message)}</p>` : ""}
-    <label for="wachtwoord">Wachtwoord</label>
-    <input id="wachtwoord" name="wachtwoord" type="password" autocomplete="current-password" required ${disabled ? "disabled" : "autofocus"}>
+    <label for="wachtwoord">${PIN_MODE ? "Pincode" : "Wachtwoord"}</label>
+    <input id="wachtwoord" name="wachtwoord" type="password" autocomplete="current-password" required ${PIN_MODE ? `class="pin" inputmode="numeric" pattern="[0-9]*" maxlength="${APP_PASSWORD.length}"` : ""} ${disabled ? "disabled" : "autofocus"}>
     <button type="submit" ${disabled ? "disabled" : ""}>Inloggen</button>
   </form>
   <p class="note">Je blijft 30 dagen ingelogd op dit apparaat.</p>
@@ -469,7 +480,8 @@ button:disabled { opacity: .45; cursor: default; }
 function loginState(query) {
   if (!APP_PASSWORD) return ["Er is nog geen wachtwoord ingesteld. Zet APP_PASSWORD bij Variables van deze service in Railway.", true];
   if (!DATABASE_URL) return ["Er is nog geen database gekoppeld. Zet DATABASE_URL bij Variables in Railway.", true];
-  if (query.get("fout") === "1") return ["Dat wachtwoord klopt niet.", false];
+  if (query.get("fout") === "1") return [PIN_MODE ? "Die pincode klopt niet." : "Dat wachtwoord klopt niet.", false];
+  if (query.get("fout") === "4") return ["Inloggen staat even dicht na te veel foute pogingen. Probeer het over een uur opnieuw.", false];
   if (query.get("fout") === "2") return ["Te veel pogingen. Probeer het over een kwartier opnieuw.", false];
   if (query.get("fout") === "3") return ["De database is nog niet bereikbaar. Probeer het zo opnieuw.", false];
   return ["", false];
@@ -707,6 +719,7 @@ async function handle(req, res) {
 
   if (p === "/login" && req.method === "POST") {
     const ip = clientIp(req);
+    if (globalBlocked()) return redirect(req, res, "/login?fout=4");
     if (blocked(ip)) return redirect(req, res, "/login?fout=2");
     const form = new URLSearchParams(await readBody(req, 4096));
     if (!passwordOk(form.get("wachtwoord"))) {

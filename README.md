@@ -30,6 +30,8 @@ Bij de eerste start maakt de app zelf de tabellen aan en zet hij je startdoelen 
 
 Pas `APP_PASSWORD` aan bij Variables. Railway start de app opnieuw en iedereen die nog ingelogd was, moet opnieuw inloggen. Het wachtwoord staat nergens in de code of in de database.
 
+Bestaat `APP_PASSWORD` uit 4 tot 8 cijfers, dan toont de inlogpagina een pincodeveld met cijfertoetsenbord. Omdat een pincode snel te raden is, gelden dan strengere grenzen: 5 foute pogingen per IP-adres per kwartier, en na 20 foute pogingen in een uur (alle adressen samen) gaat inloggen tot het eind van dat uur dicht.
+
 ## Koppeling met Handelsplan
 
 Koersplan leest je plan uit Handelsplan; het schrijft er niets in terug.
