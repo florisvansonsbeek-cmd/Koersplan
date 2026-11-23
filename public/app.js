@@ -75,6 +75,42 @@
   var eurC = new Intl.NumberFormat("nl-NL", { style: "currency", currency: "EUR", notation: "compact", maximumFractionDigits: 1 });
   var num1 = new Intl.NumberFormat("nl-NL", { maximumFractionDigits: 1 });
   function pct(v) { return v == null || !isFinite(v) ? "–" : Math.round(v) + "%"; }
+  function avgOf(a) { return a.length ? a.reduce(function (s, v) { return s + v; }, 0) / a.length : null; }
+
+  /* ---------- Tijd tot een datum en korte teksten ---------- */
+  function dayNum(d) { return Math.round(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 864e5); }
+  function today0() { var n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); }
+  function monthYear(d) { return MONTHS[d.getMonth()] + " " + d.getFullYear(); }
+  function dateShortY(d) { return shortDate(d) + (d.getFullYear() !== new Date().getFullYear() ? " " + d.getFullYear() : ""); }
+  function countdown(d) {
+    var n = dayNum(d) - dayNum(new Date()), a = Math.abs(n), t;
+    if (n === 0) return { text: "vandaag", n: 0, over: false };
+    if (a >= 61) t = Math.round(a / 30.44) + " mnd";
+    else if (a >= 14) t = Math.round(a / 7) + " wk";
+    else t = a + (a === 1 ? " dag" : " dagen");
+    return n > 0 ? { text: "nog " + t, n: n, over: false } : { text: t + " over tijd", n: n, over: true };
+  }
+  function firstSentence(t, n) {
+    t = String(t || "").trim().replace(/\s+/g, " ");
+    if (!t) return "";
+    var m = /^(.+?[.!?])(\s|$)/.exec(t);
+    return cut(m ? m[1] : t, n || 140);
+  }
+  // Waarom in één zin: eigen korte zin, anders de eerste zin van het langere waarom.
+  function goalWhy(g) { return String((g && g.kort) || "").trim() || firstSentence(g && g.waarom, 140); }
+  function unitOf(a) { return String((a && a.eenheid) || "").trim().slice(0, 12); }
+  function parseAmount(v) {
+    var s = String(v == null ? "" : v).trim().replace(/\s/g, "");
+    if (!s) return null;
+    if (s.indexOf(",") >= 0) s = s.replace(/\./g, "").replace(",", ".");
+    if (!/^\d*\.?\d+$|^\d+\.$/.test(s)) return NaN;
+    var n = Number(s);
+    return isFinite(n) && n >= 0 && n <= 100000 ? Math.round(n * 100) / 100 : NaN;
+  }
+  function fmtAmount(v) { return v == null || !isFinite(v) ? "" : num1.format(v); }
+  // Hoeveel keer je een actie per week mag aantikken: het plan plus ruimte voor extra keren.
+  function maxDone(target) { return Math.min(21, Math.max(target + 7, target * 2)); }
+  function extraOf(it) { var t = Number(it && it.target) || 0, d = Math.round(Number(it && it.gedaan) || 0); return t > 0 ? Math.max(0, d - t) : 0; }
 
   function icon(kind) {
     var svg = sv("svg", { viewBox: "0 0 16 16", "aria-hidden": "true", fill: "none" });
@@ -84,6 +120,15 @@
       svg.append(sv("path", { d: "M8 1.5l6.8 12.3H1.2z", fill: "currentColor", "stroke-linejoin": "round" }), sv("path", { d: "M8 6v3.6", stroke: "#1b1a14", "stroke-width": 1.7, "stroke-linecap": "round" }), sv("circle", { cx: 8, cy: 11.7, r: 0.95, fill: "#1b1a14" }));
     } else if (kind === "crit") {
       svg.append(sv("circle", { cx: 8, cy: 8, r: 7, fill: "currentColor" }), sv("path", { d: "M8 4.3v5.2M5.7 7.4L8 9.7l2.3-2.3", stroke: "#ffffff", "stroke-width": 1.7, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+    } else if (kind === "up" || kind === "down" || kind === "flat") {
+      var d = kind === "up" ? "M8 11.5V4.7M5.3 7.3 8 4.6l2.7 2.7" : kind === "down" ? "M8 4.5v6.8M5.3 8.7 8 11.4l2.7-2.7" : "M4.5 8h6.8M8.7 5.3 11.4 8l-2.7 2.7";
+      svg.append(sv("circle", { cx: 8, cy: 8, r: 7, fill: "currentColor" }), sv("path", { d: d, class: "ic-fg", "stroke-width": 1.7, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+    } else if (kind === "plus") {
+      svg.append(sv("path", { d: "M8 3.6v8.8M3.6 8h8.8", stroke: "currentColor", "stroke-width": 1.9, "stroke-linecap": "round" }));
+    } else if (kind === "flag") {
+      svg.append(sv("path", { d: "M4 14.5V2.2M4 2.6h8.3l-1.9 2.9 1.9 2.9H4", stroke: "currentColor", "stroke-width": 1.6, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+    } else if (kind === "step") {
+      svg.append(sv("path", { d: "M8 1.8 14.2 8 8 14.2 1.8 8z", stroke: "currentColor", "stroke-width": 1.6, "stroke-linejoin": "round" }));
     } else {
       svg.append(sv("circle", { cx: 8, cy: 8, r: 6.2, stroke: "currentColor", "stroke-width": 1.6 }), sv("path", { d: "M8 4.8V8l2.1 1.4", stroke: "currentColor", "stroke-width": 1.6, "stroke-linecap": "round" }));
     }
@@ -201,8 +246,11 @@
     if (stored && weekState(mon) === "past") return stored;
     var out = {};
     activeActions().forEach(function (x) {
-      var prev = stored && stored[x.a.id];
-      out[x.a.id] = { doel: x.g.id, doelTitel: String(x.g.titel || ""), tekst: String(x.a.tekst || ""), target: x.n, gedaan: prev ? clamp(Math.round(Number(prev.gedaan) || 0), 0, 99) : 0 };
+      var prev = stored && stored[x.a.id], unit = unitOf(x.a);
+      var it = { doel: x.g.id, doelTitel: String(x.g.titel || ""), tekst: String(x.a.tekst || ""), target: x.n, gedaan: prev ? clamp(Math.round(Number(prev.gedaan) || 0), 0, 99) : 0 };
+      if (unit) it.eenheid = unit;
+      if (prev && prev.hoeveel != null && isFinite(Number(prev.hoeveel))) it.hoeveel = Number(prev.hoeveel);
+      out[x.a.id] = it;
     });
     return out;
   }
@@ -258,6 +306,135 @@
     var tracked = completedWeeks().filter(function (w) { return w.score != null; }).slice(-4);
     var vals = tracked.map(function (w) { var p = w.per && w.per[gid]; return p ? p.d / p.t : null; }).filter(function (v) { return v != null; });
     return vals.length ? 100 * vals.reduce(function (a, b) { return a + b; }, 0) / vals.length : null;
+  }
+
+  /* ================= Opbouw (progressive overload) ================= */
+  // Per actie: wat je per week echt deed, inclusief extra keren boven je plan.
+  // Een week die je niet invulde is onbekend (null), geen nul.
+  function actionDefs() {
+    var out = {};
+    goalsSorted().forEach(function (g) { (g.acties || []).forEach(function (a) { if (a && a.id) out[a.id] = { g: g, a: a }; }); });
+    return out;
+  }
+  function weekItem(mon, aid) {
+    var st = weekState(mon), doc = S.weeks[weekKey(mon)];
+    if (st === "future") return { state: st, tracked: false, it: null };
+    if (st === "current") return { state: st, tracked: !!doc, it: itemsFor(mon)[aid] || null };
+    if (!doc || !doc.items) return { state: st, tracked: false, it: null };
+    return { state: st, tracked: !!doc.items[aid], it: doc.items[aid] || null };
+  }
+  // De eerste week die je bijhield (of de start van je jaar): weken daarvoor bestonden nog niet in Koersplan.
+  function trackStart() {
+    var m = yearStart().getTime();
+    Object.keys(S.weeks).forEach(function (k) { var d = parseYmd(S.weeks[k] && S.weeks[k].maandag); if (d) m = Math.min(m, mondayOf(d).getTime()); });
+    return m;
+  }
+  // De eerste week waarin deze actie voorkomt. Daarvoor bestond de actie nog niet: geen 'niet ingevuld'.
+  function firstSeen(aid) {
+    var best = thisMonday().getTime();
+    Object.keys(S.weeks).forEach(function (k) {
+      var d = S.weeks[k], m = d && d.items && d.items[aid] ? parseYmd(d.maandag) : null;
+      if (m) best = Math.min(best, mondayOf(m).getTime());
+    });
+    return best;
+  }
+  function actionSeries(aid, n, unit) {
+    var cur = thisMonday(), out = [], t0 = firstSeen(aid);
+    for (var i = n - 1; i >= 0; i--) {
+      var mon = addDays(cur, -7 * i);
+      if (mon.getTime() < t0) { out.push({ mon: mon, state: "pre", v: null, gedaan: null, target: null, hoeveel: null }); continue; }
+      var w = weekItem(mon, aid), it = w.it;
+      var gedaan = it ? Math.max(0, Math.round(Number(it.gedaan) || 0)) : null;
+      var target = it ? Math.max(0, Math.round(Number(it.target) || 0)) : null;
+      var amt = it && it.hoeveel != null && isFinite(Number(it.hoeveel)) ? Number(it.hoeveel) : null;
+      var known = !!it && (w.state === "current" || w.tracked);
+      out.push({ mon: mon, state: w.state, v: !known ? null : unit ? amt : gedaan, gedaan: known ? gedaan : null, target: target, hoeveel: known ? amt : null });
+    }
+    return out;
+  }
+  // Per doel: het totaal aantal keren over alle acties van dat doel.
+  function goalSeries(g, n) {
+    var acts = (g.acties || []).filter(function (a) { return a && a.id && Number(a.perWeek) > 0; });
+    var per = acts.map(function (a) { return actionSeries(a.id, n, ""); });
+    var out = [];
+    for (var i = 0; i < n; i++) {
+      var st = i === n - 1 ? "current" : per.some(function (s) { return s[i].state === "past"; }) ? "past" : "pre";
+      var p = { mon: addDays(thisMonday(), -7 * (n - 1 - i)), state: st, v: null, target: 0 };
+      per.forEach(function (s) { var x = s[i]; if (x.v != null) { p.v = (p.v || 0) + x.v; p.target += x.target || 0; } });
+      out.push(p);
+    }
+    return out;
+  }
+  // Opbouw = de trendlijn door je laatste (max 8) afgeronde weken, extra keren meegeteld.
+  // Bij keren: omhoog of omlaag als dat over 4 weken minstens een halve keer per week scheelt (of 10% van je plan).
+  // Bij hoeveelheden (km, min): als het over 4 weken minstens 10% scheelt.
+  function trendOf(series, opts) {
+    opts = opts || {};
+    var pts = [];
+    series.forEach(function (p, i) { if (p.state === "past" && p.v != null) pts.push([i, p.v]); });
+    pts = pts.slice(-8);
+    if (pts.length < 3) return { st: "nieuw", n: pts.length, delta: null };
+    var mx = avgOf(pts.map(function (p) { return p[0]; })), my = avgOf(pts.map(function (p) { return p[1]; }));
+    if (my === 0) return { st: "stil", n: pts.length, delta: null };
+    var cov = 0, vr = 0;
+    pts.forEach(function (p) { cov += (p[0] - mx) * (p[1] - my); vr += (p[0] - mx) * (p[0] - mx); });
+    var slope = vr ? cov / vr : 0, xa = pts[0][0], xb = pts[pts.length - 1][0];
+    var from = Math.max(0, my + slope * (xa - mx)), to = Math.max(0, my + slope * (xb - mx)), per4 = slope * 4, st;
+    if (opts.unit) st = per4 / my >= 0.1 ? "op" : per4 / my <= -0.1 ? "af" : "gelijk";
+    else { var thr = Math.max(0.5, 0.1 * (opts.plan || 0)); st = per4 >= thr ? "op" : per4 <= -thr ? "af" : "gelijk"; }
+    return { st: st, n: pts.length, from: from, to: to, weeks: xb - xa + 1, unit: opts.unit || "", delta: opts.unit && from > 0 ? (to - from) / from : null };
+  }
+  // Altijd over dezelfde 8 afgeronde weken, zodat je overal hetzelfde oordeel ziet.
+  function actionTrend(aid, unit, plan) { return trendOf(actionSeries(aid, 9, unit), { unit: unit, plan: plan }); }
+  var TREND = {
+    op: { k: "good", i: "up", t: "Opbouw" },
+    gelijk: { k: "neutral", i: "flat", t: "Stabiel" },
+    af: { k: "warn", i: "down", t: "Terugval" },
+    stil: { k: "neutral", i: "flat", t: "Nog niet gestart" },
+    nieuw: { k: "neutral", i: "neutral", t: "Opbouw zichtbaar na 3 weken" }
+  };
+  function trendText(tr) {
+    var T = TREND[tr.st];
+    return T.t + (tr.delta != null && tr.st !== "gelijk" ? " " + (tr.delta > 0 ? "+" : "−") + Math.round(Math.abs(tr.delta) * 100) + "%" : "");
+  }
+  function trendDetail(tr) {
+    if (tr.from == null) return tr.st === "nieuw" ? "Na drie ingevulde weken zie je of je opbouwt." : "";
+    var u = tr.unit ? " " + tr.unit : "× per week";
+    return "Trendlijn over je laatste " + tr.weeks + " afgeronde weken: van ongeveer " + fmtAmount(tr.from) + u + " naar " + fmtAmount(tr.to) + u + ", extra keren meegeteld.";
+  }
+  function trendChip(tr) {
+    var T = TREND[tr.st];
+    return h("span", { class: "chip sm chip-" + T.k, title: trendDetail(tr) || null }, icon(T.i), h("span", { text: trendText(tr) }));
+  }
+
+  /* Suggesties om de lat bij te stellen, op basis van de laatste drie afgeronde weken. */
+  function nudgeKey(aid) { return "koersplan.lat." + aid; }
+  function nudgeHidden(aid) { try { return localStorage.getItem(nudgeKey(aid)) === weekKey(thisMonday()); } catch (e) { return false; } }
+  function hideNudge(aid) { try { localStorage.setItem(nudgeKey(aid), weekKey(thisMonday())); } catch (e) { /* geen opslag: alleen nu verbergen */ } }
+  function nudgeFor(a) {
+    var n = Math.round(Number(a && a.perWeek) || 0);
+    if (n <= 0 || !a.id || nudgeHidden(a.id)) return null;
+    var cur = thisMonday(), last = [1, 2, 3].map(function (i) { return weekItem(addDays(cur, -7 * i), a.id); });
+    if (last.some(function (w) { return !w.tracked || !w.it; })) return null;
+    var done = last.map(function (w) { return Math.max(0, Math.round(Number(w.it.gedaan) || 0)); });
+    var more = done.filter(function (d) { return d > n; }).length;
+    if (!unitOf(a) && n < 14 && more >= 2 && done.every(function (d) { return d >= n; })) return { kind: "op", to: n + 1, more: more };
+    if (n >= 2 && done.every(function (d) { return d < n / 2; })) return { kind: "af", to: clamp(Math.round(avgOf(done)), 1, n - 1) };
+    return null;
+  }
+  // Bij een actie met een eenheid (km, min): kleine stap omhoog ten opzichte van vorige week.
+  function amountGuide(a) {
+    var w = weekItem(addDays(thisMonday(), -7), a.id), v = w.it && Number(w.it.hoeveel);
+    if (!w.tracked || !isFinite(v) || v <= 0) return null;
+    var next = v * 1.1;
+    return { last: v, next: next >= 20 ? Math.round(next) : Math.round(next * 10) / 10 };
+  }
+
+  /* Mijlpalen: open eerst op datum, dan in je eigen volgorde. */
+  function openMilestones(g) {
+    return (g.mijlpalen || []).filter(function (m) { return m && m.tekst && !m.klaar; })
+      .map(function (m, i) { return { m: m, i: i, d: parseYmd(m.datum) }; })
+      .sort(function (a, b) { if (a.d && b.d) return a.d - b.d; if (a.d) return -1; if (b.d) return 1; return a.i - b.i; });
   }
   function greeting() {
     var hr = new Date().getHours();
@@ -331,6 +508,8 @@
     if (prevMon.getTime() >= yearStart().getTime() && prev.score != null) subs.push("Vorige week " + pct(prev.score));
     if (ys.avg4 != null) subs.push("Gemiddeld laatste " + (ys.n4 === 1 ? "week" : ys.n4 + " weken") + " " + pct(ys.avg4));
     if (!subs.length && S.loaded.weken && st === "current") subs.push("Je eerste weekscore staat na zondag vast.");
+    var ex = 0; Object.keys(items).forEach(function (k) { ex += extraOf(items[k]); });
+    if (ex) subs.push("+" + ex + " extra " + (st === "current" ? "deze week" : "die week"));
     $("#ov-sub").textContent = subs.join(" · ");
 
     setRuler(score, st === "current" && score != null ? paceNow() : null);
@@ -342,6 +521,9 @@
   function renderOvList(mon, items, per) {
     var box = $("#ov-list");
     var active = document.activeElement, focusKey = active && active.dataset ? active.dataset.k : null;
+    // Niet opnieuw opbouwen terwijl je een hoeveelheid typt; dat gebeurt zodra je het veld verlaat.
+    if (active && active.classList && active.classList.contains("amt-in") && box.contains(active)) { S.ovDeferred = true; return; }
+    S.ovDeferred = false;
     box.replaceChildren();
     if (!S.db || !S.loaded.doelen) { box.append(emptyBox(S.db || S.status === "loading" ? "Je doelen worden geladen…" : "Je doelen konden niet worden geladen.")); return; }
     var order = goalsSorted().map(function (g) { return g.id; });
@@ -356,44 +538,170 @@
       box.append(emptyBox("Nog geen wekelijkse acties. Geef je doelen acties die je elke week kunt afvinken.", h("a", { class: "btn ghost sm", href: "#doelen", text: "Naar Doelen" })));
       return;
     }
-    var writable = canWrite();
+    var writable = canWrite(), defs = actionDefs(), isCur = weekState(mon) === "current";
     ids.forEach(function (gid) {
-      var grp = groups[gid], g = S.goals[gid], titel = (g && g.titel) || grp.titel || "Doel";
+      var grp = groups[gid], g = S.goals[gid] ? Object.assign({ id: gid }, S.goals[gid]) : null;
       var p = per[gid], ratio = p ? p.d / p.t : 0;
-      var sec = h("div", { class: "og" },
-        h("div", { class: "og-head" }, h("h3", { class: "og-title", text: titel }), h("span", { class: "og-pct", text: pct(ratio * 100) })),
-        h("div", { class: "meter", "aria-hidden": "true" }, h("span", { style: "width:" + (ratio * 100).toFixed(1) + "%" })));
-      grp.items.forEach(function (pair) {
-        var aid = pair[0], it = pair[1], n = clamp(Number(it.target) || 0, 0, 14), done = Math.min(Number(it.gedaan) || 0, n);
-        var boxes = h("div", { class: "boxes", role: "group", "aria-label": it.tekst + ": " + done + " van " + n });
-        for (var i = 0; i < n; i++) {
-          (function (i) {
-            var on = i < done;
-            boxes.append(h("button", {
-              type: "button", class: "box" + (on ? " on" : ""), "aria-pressed": on ? "true" : "false",
-              "aria-label": it.tekst + ", " + (i + 1) + " van " + n, "data-k": aid + ":" + i, disabled: !writable,
-              onclick: function () { tick(mon, aid, i); }
-            }, checkSvg()));
-          })(i);
-        }
-        sec.append(h("div", { class: "oa" }, h("div", { class: "oa-text" }, h("span", { text: it.tekst }), h("span", { class: "oa-count", text: done + "/" + n })), boxes));
-      });
+      var sec = h("section", { class: "og", "aria-label": (g && g.titel) || grp.titel || "Doel" });
+      appendKids(sec, [ovGoalHead(g, grp.titel, ratio, writable)]);
+      grp.items.forEach(function (pair) { sec.append(ovAction(mon, pair[0], pair[1], defs[pair[0]], writable, isCur)); });
+      var foot = ovGoalFoot(g, isCur, writable);
+      if (foot) sec.append(foot);
       box.append(sec);
     });
     if (focusKey) { var f = box.querySelector('[data-k="' + focusKey.replace(/"/g, "") + '"]'); if (f) f.focus(); }
   }
+  // Kop van een doel bij het afvinken: waarom je het doet en waar het naartoe gaat, in één oogopslag.
+  function ovGoalHead(g, fallbackTitel, ratio, writable) {
+    var titel = (g && g.titel) || fallbackTitel || "Doel";
+    var why = g ? goalWhy(g) : "", res = g ? String(g.resultaat || "").trim() : "";
+    var dl = g && parseYmd(g.deadline), cd = dl ? countdown(dl) : null;
+    var whyNode = why ? h("p", { class: "og-why", text: why })
+      : g && writable ? h("p", { class: "og-why og-why-empty" }, h("button", { type: "button", class: "link-btn", text: "Waarom doe je dit? Leg het vast in één zin", onclick: function () { editGoalField(g.id, "kort"); } }))
+      : null;
+    return [
+      h("div", { class: "og-top" },
+        h("div", { class: "og-eyebrow" },
+          h("span", { class: "cat", text: (g && g.categorie) || "Doel" }),
+          cd ? h("span", { class: "og-hz" + (cd.over ? " over" : ""), title: "Streefdatum " + longDate(dl) }, icon("flag"), h("span", { text: monthYear(dl) + " · " + cd.text })) : null),
+        h("span", { class: "og-pct", text: pct(ratio * 100) })),
+      h("h3", { class: "og-title", text: titel }),
+      whyNode,
+      res ? h("p", { class: "og-res" }, h("span", { class: "og-res-k", text: "Waar het naartoe gaat" }), h("span", { text: cut(res, 150) })) : null,
+      h("div", { class: "meter", "aria-hidden": "true" }, h("span", { style: "width:" + (ratio * 100).toFixed(1) + "%" }))
+    ];
+  }
+  function ovAction(mon, aid, it, def, writable, isCur) {
+    var n = clamp(Number(it.target) || 0, 0, 14), done = clamp(Math.round(Number(it.gedaan) || 0), 0, 99);
+    var unit = unitOf(it) || (def ? unitOf(def.a) : ""), extra = Math.max(0, done - n), cap = maxDone(n);
+    var boxes = h("div", { class: "boxes", role: "group", "aria-label": it.tekst + ": " + done + " van " + n + (extra ? ", waarvan " + extra + " extra" : "") });
+    for (var i = 0; i < Math.max(n, done); i++) {
+      (function (i) {
+        var on = i < done, isExtra = i >= n;
+        if (isExtra && i === n) boxes.append(h("span", { class: "box-sep", "aria-hidden": "true" }));
+        boxes.append(h("button", {
+          type: "button", class: "box" + (on ? " on" : "") + (isExtra ? " extra" : ""), "aria-pressed": on ? "true" : "false",
+          "aria-label": isExtra ? it.tekst + ", extra keer " + (i - n + 1) + ", tik om weg te halen" : it.tekst + ", " + (i + 1) + " van " + n,
+          title: isExtra ? "Extra boven je plan. Tik om weg te halen." : null,
+          "data-k": aid + ":" + i, disabled: !writable,
+          onclick: function () { tick(mon, aid, i); }
+        }, checkSvg()));
+      })(i);
+    }
+    // De plus verschijnt zodra je plan vol is: dan log je wat je méér deed.
+    if (writable && done >= n && n > 0 && done < cap) {
+      if (done === n) boxes.append(h("span", { class: "box-sep", "aria-hidden": "true" }));
+      boxes.append(h("button", {
+        type: "button", class: "box plus", "data-k": aid + ":plus",
+        "aria-label": it.tekst + ": nog een keer gedaan, extra boven je plan",
+        title: "Meer gedaan dan gepland? Tik voor een extra keer.",
+        onclick: function () { tick(mon, aid, done); }
+      }, icon("plus")));
+    }
+    var ser = actionSeries(aid, 8, unit), tr = actionTrend(aid, unit, n);
+    var main = h("div", { class: "oa-main" },
+      h("div", { class: "oa-text" },
+        h("span", { class: "oa-name", text: it.tekst }),
+        h("span", { class: "oa-count", text: done + "/" + n }),
+        extra ? h("span", { class: "xtra", text: "+" + extra + " extra" }) : null),
+      h("div", { class: "oa-trend" }, sparkSvg(ser, unit, it.tekst), trendChip(tr), unit ? amountNote(def && def.a, ser, isCur, unit) : null));
+    var ctl = h("div", { class: "oa-ctl" }, boxes);
+    if (unit) ctl.append(amountField(mon, aid, it, unit, writable));
+    return h("div", { class: "oa" }, main, ctl);
+  }
+  function amountNote(a, ser, isCur, unit) {
+    var prev = ser.length > 1 ? ser[ser.length - 2] : null, g = isCur && a ? amountGuide(a) : null, parts = [];
+    if (prev && prev.v != null) parts.push("vorige week " + fmtAmount(prev.v) + " " + unit);
+    if (g) parts.push("richting ~" + fmtAmount(g.next) + " " + unit + " (+10%)");
+    return parts.length ? h("span", { class: "oa-note", text: parts.join(" · ") }) : null;
+  }
+  function amountField(mon, aid, it, unit, writable) {
+    var inp = h("input", {
+      class: "amt-in", type: "text", inputmode: "decimal", autocomplete: "off", maxlength: 9, "data-k": aid + ":amt",
+      id: "amt-" + aid, value: it.hoeveel != null ? fmtAmount(Number(it.hoeveel)) : "", placeholder: "0", disabled: !writable,
+      oninput: function (e) {
+        var v = parseAmount(e.target.value);
+        e.target.setAttribute("aria-invalid", isNaN(v) ? "true" : "false");
+        if (!isNaN(v)) setAmount(mon, aid, v);
+      },
+      onblur: function () { if (S.ovDeferred) setTimeout(renderOverview, 0); }
+    });
+    return h("div", { class: "amt" }, h("label", { class: "sr", for: "amt-" + aid, text: "Totaal deze week voor " + it.tekst + ", in " + unit }), inp, h("span", { class: "amt-u", "aria-hidden": "true", text: unit }));
+  }
+  function ovGoalFoot(g, isCur, writable) {
+    if (!g) return null;
+    var ms = (g.mijlpalen || []).filter(function (m) { return m && m.tekst; }), open = openMilestones(g), parts = [];
+    if (open.length) {
+      var nx = open[0], cd = nx.d ? countdown(nx.d) : null;
+      parts.push(h("p", { class: "og-ms" },
+        icon("step"),
+        h("span", { class: "og-ms-k", text: "Volgende mijlpaal" + (ms.length > 1 ? " · " + (ms.length - open.length) + "/" + ms.length + " gehaald" : "") }),
+        h("span", { class: "og-ms-t", text: nx.m.tekst }),
+        cd ? h("span", { class: "og-ms-d" + (cd.over ? " over" : ""), text: dateShortY(nx.d) + " · " + cd.text }) : null));
+    } else if (ms.length) parts.push(h("p", { class: "og-ms done" }, icon("step"), h("span", { class: "og-ms-t", text: ms.length === 1 ? "Je mijlpaal is gehaald." : "Alle " + ms.length + " mijlpalen gehaald." })));
+    if (isCur && writable) {
+      var nds = (g.acties || []).map(function (a) { return { a: a, nd: nudgeFor(a) }; }).filter(function (x) { return x.nd; });
+      if (nds.length) parts.push(nudgeBox(g, nds[0].a, nds[0].nd));
+    }
+    return parts.length ? h("div", { class: "og-foot" }, parts) : null;
+  }
+  function nudgeBox(g, a, nd) {
+    var text = nd.kind === "op"
+      ? (nd.more === 3 ? "Drie weken op rij deed je meer dan gepland." : "Twee van de laatste drie weken deed je meer dan gepland.") + " Maak het je nieuwe lat: " + nd.to + "× per week?"
+      : "Drie weken op rij onder de helft van je plan. Een lat van " + nd.to + "× per week die je haalt, bouwt meer op dan een lat die je mist.";
+    var wrap = h("div", { class: "nudge nudge-" + nd.kind });
+    wrap.append(icon(nd.kind === "op" ? "up" : "down"),
+      h("p", { class: "nudge-t" }, h("strong", { text: cut(a.tekst, 60) + ". " }), text),
+      h("div", { class: "nudge-act" },
+        h("button", { type: "button", class: "btn primary sm", text: "Lat naar " + nd.to + "×", onclick: function () { setPerWeek(g.id, a.id, nd.to); } }),
+        h("button", { type: "button", class: "link-btn", text: "Nu niet", onclick: function () { hideNudge(a.id); renderOverview(); renderGoals(); } })));
+    return wrap;
+  }
+  function setPerWeek(gid, aid, to) {
+    var g = S.goals[gid]; if (!g || !canWrite()) return;
+    var b = clone(g), hit = false;
+    (b.acties || []).forEach(function (a) { if (a.id === aid) { a.perWeek = clamp(Math.round(to), 1, 14); hit = true; } });
+    if (!hit) return;
+    b.concept = false; b.bijgewerkt = new Date().toISOString();
+    S.goals[gid] = b; queueWrite("doelen/" + gid, b, 0);
+    renderAll();
+    toast("Lat staat op " + to + "× per week. Deze week telt dat als 100%.");
+  }
+  function editGoalField(gid, field) {
+    if (location.hash !== "#doelen") location.hash = "#doelen";
+    setTimeout(function () {
+      if (S.editing && S.editing !== gid) return;
+      if (!S.editing) startEdit(gid);
+      var el = document.getElementById("ge-" + gid + "-" + field);
+      if (el) { el.scrollIntoView({ block: "center" }); el.focus(); }
+    }, 60);
+  }
   function tick(mon, aid, i) {
     if (!canWrite()) return;
-    var key = weekKey(mon), items = clone(itemsFor(mon)), it = items[aid];
+    var items = clone(itemsFor(mon)), it = items[aid];
     if (!it) return;
-    var cur = Math.min(Number(it.gedaan) || 0, Number(it.target) || 0);
-    it.gedaan = i < cur ? i : i + 1;
-    var prev = S.weeks[key] || {};
-    var doc = { maandag: ymd(mon), items: items, reflectie: prev.reflectie || "", bijgewerkt: new Date().toISOString() };
-    S.weeks[key] = doc;
-    queueWrite("weken/" + key, doc, 300);
+    var t = Number(it.target) || 0, cur = clamp(Math.round(Number(it.gedaan) || 0), 0, 99);
+    // Vakje i aantikken vult t/m i; een gevuld vakje aantikken haalt het en alles erna weg. Extra keren werken hetzelfde.
+    it.gedaan = clamp(i < cur ? i : i + 1, 0, maxDone(t));
+    saveWeekItems(mon, items, 300);
     renderOverview();
     if (S.view === "jaar") renderYear();
+    if (S.view === "doelen") renderGoals();
+  }
+  function setAmount(mon, aid, v) {
+    if (!canWrite()) return;
+    var items = clone(itemsFor(mon)), it = items[aid];
+    if (!it) return;
+    var def = actionDefs()[aid], unit = unitOf(it) || (def ? unitOf(def.a) : "");
+    if (v == null) delete it.hoeveel; else it.hoeveel = v;
+    if (unit) it.eenheid = unit;
+    saveWeekItems(mon, items, 700);
+  }
+  function saveWeekItems(mon, items, delay) {
+    var key = weekKey(mon), prev = S.weeks[key] || {};
+    var doc = { maandag: ymd(mon), items: items, reflectie: prev.reflectie || "", bijgewerkt: new Date().toISOString() };
+    S.weeks[key] = doc;
+    queueWrite("weken/" + key, doc, delay);
   }
   var reflTimer;
   function saveReflection(mon, val) {
@@ -407,10 +715,13 @@
 
   /* ================= Render: doelen ================= */
   var CATS = ["Werk", "Focus", "Sport", "Geld", "Project", "Vrije tijd", "Persoonlijk"];
+  var UNITS = ["km", "min", "uur", "kg", "pagina's"];
+  var KORT_PH = "Bijv. meer verantwoordelijkheid en keuzevrijheid in mijn werk";
   function renderGoals(force) {
     var gs = goalsSorted();
     $("#g-concept").hidden = !gs.some(function (g) { return g.concept; });
     renderNoteSelect();
+    if (S.view === "doelen") renderKoers();
     if (S.editing && !force) return;
     var list = $("#g-list");
     list.replaceChildren();
@@ -420,32 +731,111 @@
     if (!gs.length && S.editing !== "__new") list.append(emptyBox("Nog geen doelen. Begin met het doel dat dit jaar het meeste verschil maakt."));
     gs.forEach(function (g) { list.append(S.editing === g.id ? goalForm() : goalCard(g)); });
     if (S.editing === "__new") list.append(goalForm());
+    if (S.view === "doelen") drawObCharts();
   }
   function goalCard(g) {
-    var ms = g.mijlpalen || [], done = ms.filter(function (m) { return m.klaar; }).length;
+    var ms = (g.mijlpalen || []).filter(function (m) { return m && m.tekst; }), done = ms.filter(function (m) { return m.klaar; }).length;
     var a4 = goalAvg4(g.id), writable = canWrite();
     var acts = (g.acties || []).filter(function (a) { return a && a.tekst; });
+    var dl = parseYmd(g.deadline), cd = dl ? countdown(dl) : null;
+    var kort = String(g.kort || "").trim();
+    var obWeeks = clamp(Math.round((thisMonday().getTime() - trackStart()) / (7 * 864e5)) + 1, 6, 12);
     return h("article", { class: "g-card", id: "goal-" + g.id },
       h("div", { class: "g-top" },
         h("span", { class: "cat", text: g.categorie || "Doel" }),
         g.concept ? h("span", { class: "tag-concept", text: "startversie" }) : null,
-        a4 != null ? h("span", { class: "g-avg", title: "Gemiddelde afvinkscore over je laatste 4 afgeronde weken", text: pct(a4) + " · laatste 4 wk" }) : null),
+        cd ? h("span", { class: "og-hz" + (cd.over ? " over" : ""), title: "Streefdatum " + longDate(dl) }, icon("flag"), h("span", { text: monthYear(dl) + " · " + cd.text })) : null,
+        a4 != null ? h("span", { class: "g-avg", title: "Gemiddelde uitvoering over je laatste 4 afgeronde weken, maximaal 100% per week", text: pct(a4) + " · laatste 4 wk" }) : null),
       h("h3", { class: "g-title", text: g.titel || "Naamloos doel" }),
+      kort ? h("p", { class: "og-why g-kort", text: kort }) : null,
       g.waarom ? h("div", { class: "g-why" }, h("span", { class: "label", text: "Waarom dit je verder brengt" }), h("p", { text: g.waarom })) : null,
       h("dl", { class: "g-meta" },
         h("div", null, h("dt", { text: "Resultaat" }), h("dd", { text: g.resultaat || "Nog niet vastgelegd" })),
-        h("div", null, h("dt", { text: "Deadline" }), h("dd", { text: g.deadline ? longDate(parseYmd(g.deadline)) : "Geen" }))),
-      acts.length ? h("div", { class: "g-acts" }, h("span", { class: "label", text: "Elke week" }),
-        h("ul", { class: "g-list-ul" }, acts.map(function (a) { return h("li", null, h("span", { text: a.tekst }), h("span", { class: "x", text: (Number(a.perWeek) || 0) + "× per week" })); }))) : null,
+        h("div", null, h("dt", { text: "Streefdatum" }), h("dd", null, dl ? longDate(dl) : "Geen", cd ? h("span", { class: "dd-sub" + (cd.over ? " over" : ""), text: cd.text }) : null))),
+      acts.length ? h("div", { class: "g-acts" },
+        h("div", { class: "g-acts-head" }, h("span", { class: "label", text: "Elke week · opbouw per week" }),
+          h("div", { class: "legend", "aria-hidden": "true" },
+            h("span", null, h("i", { class: "sw", style: "background:var(--s1)" }), "gedaan"),
+            acts.some(function (a) { return !unitOf(a); }) ? h("span", null, h("i", { class: "ln", style: "background:var(--ink)" }), "plan") : null)),
+        h("ul", { class: "g-list-ul g-act-list" }, acts.map(function (a) {
+          var unit = unitOf(a), tr = actionTrend(a.id, unit, Number(a.perWeek) || 0), nd = writable ? nudgeFor(a) : null, guide = unit ? amountGuide(a) : null;
+          return h("li", { class: "g-act" },
+            h("div", { class: "g-act-top" }, h("span", { class: "g-act-t", text: a.tekst }), h("span", { class: "x", text: (Number(a.perWeek) || 0) + "× per week" + (unit ? " · in " + unit : "") })),
+            h("div", { class: "ob" },
+              h("div", { class: "ob-chart", "data-aid": a.id, "data-unit": unit, "data-label": a.tekst, "data-weeks": obWeeks }),
+              h("div", { class: "ob-side" }, trendChip(tr),
+                tr.from != null ? h("span", { class: "oa-note", text: "trend ~" + fmtAmount(tr.from) + " → ~" + fmtAmount(tr.to) + (unit ? " " + unit : "× per week") }) : null,
+                guide ? h("span", { class: "oa-note", text: "vorige week " + fmtAmount(guide.last) + " " + unit + ", volgende stap ~" + fmtAmount(guide.next) + " " + unit + " (+10%)" }) : null)),
+            nd ? nudgeBox(g, a, nd) : null);
+        })),
+        obTable(acts, obWeeks)) : null,
       ms.length ? h("div", { class: "g-ms" }, h("span", { class: "label", text: "Mijlpalen " + done + "/" + ms.length }),
         h("ul", { class: "g-list-ul" }, ms.map(function (m) {
+          var md = parseYmd(m.datum), mc = md && !m.klaar ? countdown(md) : null;
           return h("li", null, h("label", null,
             h("input", { type: "checkbox", id: "ms-" + g.id + "-" + m.id, checked: !!m.klaar, disabled: !writable, onchange: function (e) { toggleMs(g.id, m.id, e.target.checked); } }),
-            h("span", { text: m.tekst })));
+            h("span", { class: "ms-t", text: m.tekst }),
+            md ? h("span", { class: "ms-d" + (mc && mc.over ? " over" : ""), text: dateShortY(md) + (mc ? " · " + mc.text : "") }) : null));
         }))) : null,
       h("div", { class: "g-foot" },
         writable ? h("button", { class: "btn ghost sm", type: "button", text: "Bewerken", onclick: function () { startEdit(g.id); } }) : null,
         S.sparOn ? h("button", { class: "link-btn", type: "button", text: "Spar over dit doel", onclick: function () { sparAbout('Help me met mijn doel "' + (g.titel || "") + '". '); } }) : null));
+  }
+  function obTable(acts, n) {
+    var cols = acts.map(function (a) { return { a: a, unit: unitOf(a), ser: actionSeries(a.id, n, unitOf(a)) }; });
+    var rows = [];
+    for (var i = n - 1; i >= 0; i--) {
+      var mon = cols[0].ser[i].mon;
+      if (cols.every(function (c) { return c.ser[i].state === "pre"; })) continue;
+      rows.push(h("tr", null, h("td", { text: "wk " + isoWeek(mon).week + (cols[0].ser[i].state === "current" ? " (nu)" : "") }), h("td", { text: rangeLabel(mon) }),
+        cols.map(function (c) {
+          var p = c.ser[i];
+          return h("td", { class: "n", text: p.v == null ? "–" : c.unit ? fmtAmount(p.v) + " " + c.unit + (p.gedaan != null ? " (" + p.gedaan + "×)" : "") : p.v + "/" + (p.target || 0) });
+        })));
+    }
+    return h("details", { class: "tbl" }, h("summary", { text: "Toon opbouw als tabel" }),
+      h("div", { class: "tbl-wrap" }, h("table", null,
+        h("thead", null, h("tr", null, h("th", { text: "Week" }), h("th", { text: "Datum" }), cols.map(function (c) { return h("th", { text: cut(c.a.tekst, 28) }); }))),
+        h("tbody", null, rows))));
+  }
+  // Grotere opbouwgrafiek op de doelkaart; wordt getekend zodra de kaart in de pagina staat en zijn breedte kent.
+  function drawObCharts() {
+    Array.prototype.forEach.call(document.querySelectorAll("#g-list .ob-chart"), function (box) {
+      var W = Math.floor(box.clientWidth); if (!W) return;
+      var unit = box.dataset.unit || "", label = box.dataset.label || "", n = Number(box.dataset.weeks) || 12;
+      box.replaceChildren(obChart(actionSeries(box.dataset.aid, n, unit), unit, label, Math.max(220, W)));
+    });
+  }
+  function obChart(ser, unit, label, W) {
+    var H = 92, m = { l: 30, r: 4, t: 10, b: 20 }, pw = W - m.l - m.r, ph = H - m.t - m.b;
+    var n = ser.length, slot = pw / n, bw = clamp(slot - 6, 3, 24);
+    var max = 0;
+    ser.forEach(function (p) { if (p.v != null) max = Math.max(max, p.v); if (!unit && p.target) max = Math.max(max, p.target); });
+    var top = max <= 0 ? 1 : max <= 4 ? Math.ceil(max) : max <= 10 ? Math.ceil(max / 2) * 2 : Math.ceil(max / 5) * 5;
+    function y(v) { return m.t + ph * (1 - v / top); }
+    function cx(i) { return m.l + slot * i + slot / 2; }
+    var svg = sv("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": label + ", opbouw per week. " + seriesLabel(ser, unit) + ". De tabel onder de kaart toont dezelfde waarden." });
+    [0, top].forEach(function (v, k) {
+      svg.append(sv("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: k === 0 ? "c-base" : "c-grid" }));
+      svg.append(sv("text", { x: m.l - 6, y: y(v) + 3.5, class: "c-tick", "text-anchor": "end" }, unit ? fmtAmount(v) : String(v)));
+    });
+    ser.forEach(function (p, i) {
+      var x = cx(i) - bw / 2, cls = "c-bar" + (p.state === "current" ? " cur" : "");
+      if (p.v == null) { if (p.state === "past") svg.append(sv("rect", { x: x, y: y(0) - 3, width: bw, height: 3, class: "c-none" })); }
+      else if (p.v <= 0) svg.append(sv("rect", { x: x, y: y(0) - 1.5, width: bw, height: 1.5, class: cls }));
+      else svg.append(sv("path", { d: topRounded(x, y(Math.min(p.v, top)), bw, y(0) - y(Math.min(p.v, top)), 4), class: cls }));
+      if (!unit && p.target && p.v != null) svg.append(sv("line", { x1: x - 3, x2: x + bw + 3, y1: y(p.target), y2: y(p.target), class: "c-tgt" }));
+    });
+    svg.append(sv("text", { x: cx(0), y: H - 5, class: "c-tick", "text-anchor": "middle" }, "wk " + isoWeek(ser[0].mon).week));
+    var mid = Math.floor(n / 2);
+    if (slot * mid > 60) svg.append(sv("text", { x: cx(mid), y: H - 5, class: "c-tick", "text-anchor": "middle" }, "wk " + isoWeek(ser[mid].mon).week));
+    svg.append(sv("text", { x: cx(n - 1), y: H - 5, class: "c-tick", "text-anchor": "middle" }, "nu"));
+    ser.forEach(function (p, i) {
+      var hit = sv("rect", { x: m.l + slot * i, y: 0, width: slot, height: H, fill: "transparent" });
+      bindTip(hit, function () { return actTipRows(p, unit, ""); });
+      svg.append(hit);
+    });
+    return svg;
   }
   function startEdit(id) {
     var g = S.goals[id]; if (!g) return;
@@ -458,7 +848,7 @@
   function newGoal() {
     var id = rid("d");
     S.editing = "__new";
-    S.draft = { id: id, isNew: true, titel: "", categorie: "", waarom: "", resultaat: "", deadline: "", acties: [{ id: rid("a"), tekst: "", perWeek: 1 }], mijlpalen: [] };
+    S.draft = { id: id, isNew: true, titel: "", categorie: "", waarom: "", kort: "", resultaat: "", deadline: "", acties: [{ id: rid("a"), tekst: "", perWeek: 1 }], mijlpalen: [] };
     renderGoals(true);
     var el = document.getElementById("ge-" + id + "-titel"); if (el) { el.focus(); el.scrollIntoView({ block: "center" }); }
   }
@@ -475,30 +865,37 @@
     form.append(h("div", { class: "g-form-grid two" },
       h("div", { class: "field" }, h("label", { for: fid("cat"), text: "Categorie" }),
         h("input", { id: fid("cat"), type: "text", list: fid("cats"), maxlength: 30, value: d.categorie || "", oninput: function (e) { d.categorie = e.target.value; } }), dl),
-      h("div", { class: "field" }, h("label", { for: fid("deadline"), text: "Deadline (optioneel)" }),
+      h("div", { class: "field" }, h("label", { for: fid("deadline"), text: "Streefdatum (optioneel)" }),
         h("input", { id: fid("deadline"), type: "date", value: d.deadline || "", oninput: function (e) { d.deadline = e.target.value; } }))));
     form.append(h("div", { class: "field" }, h("label", { for: fid("waarom"), text: "Waarom dit je verder brengt" }),
-      h("textarea", { id: fid("waarom"), rows: 3, maxlength: 1200, value: d.waarom || "", placeholder: "Hoe beïnvloedt dit je positief en maakt het je klaar voor de toekomst?", oninput: function (e) { d.waarom = e.target.value; } })));
+      h("textarea", { id: fid("waarom"), rows: 3, maxlength: 1200, value: d.waarom || "", placeholder: "Hoe beïnvloedt dit je positief en maakt het je klaar voor de toekomst?", oninput: function (e) { d.waarom = e.target.value; var k = document.getElementById(fid("kort")); if (k) k.placeholder = firstSentence(d.waarom, 140) || KORT_PH; } })));
+    form.append(h("div", { class: "field" }, h("label", { for: fid("kort"), text: "Waarom in één zin (zie je elke week bij het afvinken)" }),
+      h("input", { id: fid("kort"), type: "text", maxlength: 140, value: d.kort || "", placeholder: firstSentence(d.waarom, 140) || KORT_PH, oninput: function (e) { d.kort = e.target.value; } }),
+      h("span", { class: "hint", text: "Laat je dit leeg, dan zie je de eerste zin van je waarom." })));
     form.append(h("div", { class: "field" }, h("label", { for: fid("res"), text: "Meetbaar resultaat" }),
       h("textarea", { id: fid("res"), rows: 2, maxlength: 600, value: d.resultaat || "", placeholder: "Wanneer heb je dit doel gehaald?", oninput: function (e) { d.resultaat = e.target.value; } })));
 
     var actRows = h("div", { class: "rows" });
+    actRows.append(h("datalist", { id: fid("units") }, UNITS.map(function (u) { return h("option", { value: u }); })));
     d.acties.forEach(function (a, idx) {
-      actRows.append(h("div", { class: "row-edit" },
+      actRows.append(h("div", { class: "row-edit act" },
         h("input", { id: fid("a-" + a.id), type: "text", maxlength: 120, "aria-label": "Wekelijkse actie", value: a.tekst || "", placeholder: "Actie, bijv. 90 minuten focus", oninput: function (e) { a.tekst = e.target.value; } }),
         h("div", { class: "per" }, h("input", { id: fid("n-" + a.id), type: "number", min: 0, max: 14, step: 1, inputmode: "numeric", "aria-label": "Aantal keer per week", value: a.perWeek == null ? 1 : a.perWeek, oninput: function (e) { a.perWeek = e.target.value; } }), h("span", { text: "×/wk" })),
+        h("input", { id: fid("u-" + a.id), class: "unit-in", type: "text", maxlength: 12, list: fid("units"), "aria-label": "Eenheid, optioneel, bijvoorbeeld km", value: a.eenheid || "", placeholder: "eenheid", oninput: function (e) { a.eenheid = e.target.value; } }),
         delBtn(function () { d.acties.splice(idx, 1); renderGoals(true); }, "Verwijder actie", false)));
     });
     form.append(h("div", { class: "field" }, h("span", { class: "label", text: "Wekelijkse acties (die vink je af)" }), actRows,
+      h("span", { class: "hint", text: "Eenheid is optioneel. Kies bijvoorbeeld km of min, dan vul je elke week ook de hoeveelheid in en zie je of je opbouwt." }),
       h("div", null, h("button", { type: "button", class: "link-btn", text: "Actie toevoegen", onclick: function () { var na = { id: rid("a"), tekst: "", perWeek: 1 }; d.acties.push(na); renderGoals(true); var el = document.getElementById(fid("a-" + na.id)); if (el) el.focus(); } }))));
 
     var msRows = h("div", { class: "rows" });
     d.mijlpalen.forEach(function (m, idx) {
       msRows.append(h("div", { class: "row-edit ms" },
         h("input", { id: fid("m-" + m.id), type: "text", maxlength: 160, "aria-label": "Mijlpaal", value: m.tekst || "", placeholder: "Mijlpaal", oninput: function (e) { m.tekst = e.target.value; } }),
+        h("input", { id: fid("md-" + m.id), type: "date", "aria-label": "Datum van de mijlpaal, optioneel", value: m.datum || "", oninput: function (e) { m.datum = e.target.value; } }),
         delBtn(function () { d.mijlpalen.splice(idx, 1); renderGoals(true); }, "Verwijder mijlpaal", false)));
     });
-    form.append(h("div", { class: "field" }, h("span", { class: "label", text: "Mijlpalen" }), msRows,
+    form.append(h("div", { class: "field" }, h("span", { class: "label", text: "Mijlpalen, met een datum als je die weet" }), msRows,
       h("div", null, h("button", { type: "button", class: "link-btn", text: "Mijlpaal toevoegen", onclick: function () { var nm = { id: rid("m"), tekst: "", klaar: false }; d.mijlpalen.push(nm); renderGoals(true); var el = document.getElementById(fid("m-" + nm.id)); if (el) el.focus(); } }))));
 
     form.append(h("div", { class: "form-actions" },
@@ -525,13 +922,19 @@
       titel: titel.slice(0, 120),
       categorie: String(d.categorie || "").trim().slice(0, 30),
       waarom: String(d.waarom || "").trim().slice(0, 1200),
+      kort: String(d.kort || "").trim().slice(0, 140),
       resultaat: String(d.resultaat || "").trim().slice(0, 600),
       deadline: parseYmd(d.deadline) ? d.deadline : "",
       acties: (d.acties || []).filter(function (a) { return String(a.tekst || "").trim(); }).map(function (a) {
-        return { id: a.id || rid("a"), tekst: String(a.tekst).trim().slice(0, 120), perWeek: clamp(Math.round(Number(a.perWeek) || 0), 0, 14) };
+        var out = { id: a.id || rid("a"), tekst: String(a.tekst).trim().slice(0, 120), perWeek: clamp(Math.round(Number(a.perWeek) || 0), 0, 14) };
+        var u = unitOf(a); if (u) out.eenheid = u;
+        return out;
       }),
       mijlpalen: (d.mijlpalen || []).filter(function (m) { return String(m.tekst || "").trim(); }).map(function (m) {
-        return { id: m.id || rid("m"), tekst: String(m.tekst).trim().slice(0, 160), klaar: !!m.klaar };
+        var out = { id: m.id || rid("m"), tekst: String(m.tekst).trim().slice(0, 160), klaar: !!m.klaar };
+        if (parseYmd(m.datum)) out.datum = m.datum;
+        if (m.klaar && m.klaarOp) out.klaarOp = m.klaarOp;
+        return out;
       }),
       volgorde: old.volgorde != null ? old.volgorde : nextOrder(),
       concept: false,
@@ -555,10 +958,167 @@
   function toggleMs(gid, mid, val) {
     var g = S.goals[gid]; if (!g || !canWrite()) return;
     var b = clone(g);
-    (b.mijlpalen || []).forEach(function (m) { if (m.id === mid) m.klaar = !!val; });
+    (b.mijlpalen || []).forEach(function (m) {
+      if (m.id !== mid) return;
+      m.klaar = !!val;
+      if (val) m.klaarOp = ymd(new Date()); else delete m.klaarOp;
+    });
     S.goals[gid] = b;
     queueWrite("doelen/" + gid, b, 200);
     renderGoals();
+    renderOverview();
+    renderOvKoers();
+  }
+
+  /* ---------- Koers: je doelen op een tijdlijn naar de toekomst ---------- */
+  function koersRows() {
+    return goalsSorted().map(function (g) {
+      return {
+        g: g, dl: parseYmd(g.deadline),
+        ms: (g.mijlpalen || []).filter(function (m) { return m && m.tekst; }).map(function (m) { return { m: m, d: parseYmd(m.datum) }; })
+      };
+    }).sort(function (a, b) {
+      if (a.dl && b.dl) return a.dl - b.dl;
+      if (a.dl) return -1;
+      if (b.dl) return 1;
+      return 0;
+    });
+  }
+  function koersTicks(tStart, tEnd, plotW) {
+    var days = (tEnd - tStart) / 864e5, steps = [1, 3, 6, 12], step = 12;
+    for (var i = 0; i < steps.length; i++) { if (plotW / (days / (30.44 * steps[i])) >= 56) { step = steps[i]; break; } }
+    var s = new Date(tStart), m = new Date(s.getFullYear(), s.getMonth() + 1, 1), out = [];
+    while (m.getMonth() % step !== 0) m = new Date(m.getFullYear(), m.getMonth() + 1, 1);
+    for (; m.getTime() <= tEnd; m = new Date(m.getFullYear(), m.getMonth() + step, 1)) out.push(m);
+    return { ticks: out, step: step };
+  }
+  function koersTip(r, x) {
+    var rows = [h("div", { class: "tip-h", text: cut(r.g.titel || "Doel", 48) })];
+    if (x === "dl") {
+      var cd = countdown(r.dl);
+      rows.push(h("div", { class: "tip-r" }, h("strong", { text: "Streefdatum " + longDate(r.dl) })), h("div", { class: "tip-sub", text: cd.text }));
+      if (r.g.resultaat) rows.push(h("div", { text: cut(r.g.resultaat, 140) }));
+    } else {
+      var c2 = x.d ? countdown(x.d) : null;
+      rows.push(h("div", { class: "tip-r" }, h("strong", { text: x.m.tekst })),
+        h("div", { class: "tip-sub", text: (x.d ? longDate(x.d) + " · " : "") + (x.m.klaar ? "gehaald" + (x.m.klaarOp && parseYmd(x.m.klaarOp) ? " op " + longDate(parseYmd(x.m.klaarOp)) : "") : c2 ? c2.text : "") }));
+    }
+    return rows;
+  }
+  function renderKoers() {
+    var box = $("#koers-chart"), list = $("#koers-list"), note = $("#koers-note");
+    if (!box) return;
+    if (!S.db || !S.loaded.doelen) { box.replaceChildren(emptyBox(S.status === "error" ? "Je doelen konden niet worden geladen." : "Laden…")); list.replaceChildren(); note.hidden = true; return; }
+    var rows = koersRows();
+    if (!rows.length) { box.replaceChildren(emptyBox("Nog geen doelen. Voeg er een toe en geef het een streefdatum.")); list.replaceChildren(); note.hidden = true; return; }
+    var dated = rows.filter(function (r) { return r.dl; }).length, msDated = 0;
+    rows.forEach(function (r) { r.ms.forEach(function (x) { if (x.d) msDated++; }); });
+    note.hidden = dated > 0 && msDated > 0;
+    note.textContent = !dated ? "Geef je doelen een streefdatum en je mijlpalen een datum. Dan zie je hier je route naar de toekomst."
+      : !msDated ? "Geef je mijlpalen een datum. Dan zie je per doel de tussenstappen op weg naar je streefdatum." : "";
+    renderKoersList(rows, list);
+    var W = Math.floor(box.clientWidth);
+    if (!W) return;
+    W = Math.max(300, W);
+    var narrow = W < 640, now = today0(), t0 = now.getTime();
+    var tMax = t0 + 182 * 864e5;
+    rows.forEach(function (r) { if (r.dl) tMax = Math.max(tMax, r.dl.getTime()); r.ms.forEach(function (x) { if (x.d) tMax = Math.max(tMax, x.d.getTime()); }); });
+    var span = tMax - t0, tStart = t0 - span * 0.045, tEnd = tMax + span * 0.01;
+    var labelW = narrow ? 0 : Math.min(250, Math.round(W * 0.27)), x0 = narrow ? 6 : labelW + 18, x1 = W - (narrow ? 64 : 76);
+    function X(t) { return x0 + (x1 - x0) * (clamp(t, tStart, tEnd) - tStart) / (tEnd - tStart); }
+    var axisH = 28, laneH = narrow ? 62 : 52, H = axisH + rows.length * laneH + 4;
+    var svg = sv("svg", { viewBox: "0 0 " + W + " " + H, class: "koers-svg", role: "group", "aria-label": "Tijdlijn van je doelen, van nu tot " + monthYear(new Date(tMax)) + ". De lijst eronder toont dezelfde data." });
+    var tk = koersTicks(tStart, tEnd, x1 - x0), xNow = X(t0);
+    tk.ticks.forEach(function (d) {
+      var x = X(d.getTime());
+      svg.append(sv("line", { x1: x, x2: x, y1: axisH - 8, y2: H - 2, class: "k-grid" }));
+      var lab = tk.step === 12 || d.getMonth() === 0 ? String(d.getFullYear()) : MONTHS[d.getMonth()];
+      var lw = lab.length * 7 + 4;
+      if ((x + 4 < xNow + 14 && x + 4 + lw > xNow - 14) || x + lw > W) return;
+      svg.append(sv("text", { x: x + 4, y: 15, class: "k-axis" + (d.getMonth() === 0 ? " yr" : "") }, lab));
+    });
+    rows.forEach(function (r, i) { if (i > 0) svg.append(sv("line", { x1: 0, x2: W, y1: axisH + i * laneH, y2: axisH + i * laneH, class: "k-sep" })); });
+    svg.append(sv("line", { x1: xNow, x2: xNow, y1: axisH - 10, y2: H - 2, class: "k-now" }));
+    svg.append(sv("text", { x: xNow, y: 15, class: "k-now-t", "text-anchor": "middle" }, "nu"));
+    rows.forEach(function (r, i) {
+      var top = axisH + i * laneH, cy = narrow ? top + 42 : top + laneH / 2 + 1;
+      var cd = r.dl ? countdown(r.dl) : null;
+      var maxChars = narrow ? Math.floor((W - 90) / 7.2) : Math.floor(labelW / 7.4);
+      if (narrow) {
+        svg.append(sv("text", { x: 0, y: top + 19, class: "k-lbl" }, cut(r.g.titel || "Doel", maxChars)));
+      } else {
+        svg.append(sv("text", { x: 0, y: cy - 4, class: "k-lbl" }, cut(r.g.titel || "Doel", maxChars)));
+        svg.append(sv("text", { x: 0, y: cy + 13, class: "k-sub" + (cd && cd.over ? " over" : "") }, cd ? cd.text : "geen streefdatum"));
+      }
+      if (r.dl) {
+        var xd = X(r.dl.getTime());
+        svg.append(sv("line", { x1: Math.min(xNow, xd), x2: Math.max(xNow, xd), y1: cy, y2: cy, class: "k-track" }));
+      } else {
+        svg.append(sv("text", { x: xNow + 10, y: cy + 4, class: "k-sub" }, narrow ? "geen streefdatum" : "zet een streefdatum bij Bewerken"));
+      }
+      r.ms.forEach(function (x) {
+        if (!x.d) return;
+        var mx = X(x.d.getTime()), over = !x.m.klaar && dayNum(x.d) < dayNum(now), s = 6;
+        var cls = "k-ms" + (x.m.klaar ? " done" : "") + (over ? " over" : "");
+        svg.append(sv("path", { d: "M" + mx + "," + (cy - s - 2) + "L" + (mx + s + 2) + "," + cy + "L" + mx + "," + (cy + s + 2) + "L" + (mx - s - 2) + "," + cy + "Z", class: "k-ring" }));
+        svg.append(sv("path", { d: "M" + mx + "," + (cy - s) + "L" + (mx + s) + "," + cy + "L" + mx + "," + (cy + s) + "L" + (mx - s) + "," + cy + "Z", class: cls }));
+        var hit = sv("circle", { cx: mx, cy: cy, r: 13, class: "k-hit", tabindex: "0", role: "img",
+          "aria-label": "Mijlpaal " + x.m.tekst + ", " + longDate(x.d) + (x.m.klaar ? ", gehaald" : over ? ", over tijd" : "") });
+        bindTip(hit, function () { return koersTip(r, x); });
+        svg.append(hit);
+      });
+      if (r.dl) {
+        var xd2 = X(r.dl.getTime()), lab = monthYear(r.dl), right = xd2 + 12 + lab.length * 6.8 <= W;
+        svg.append(sv("circle", { cx: xd2, cy: cy, r: 8, class: "k-ring" }));
+        svg.append(sv("circle", { cx: xd2, cy: cy, r: 6, class: "k-dl" + (cd && cd.over ? " over" : "") }));
+        svg.append(sv("text", { x: right ? xd2 + 12 : xd2 - 12, y: cy + 4, class: "k-dlt", "text-anchor": right ? "start" : "end" }, lab));
+        var hitD = sv("circle", { cx: xd2, cy: cy, r: 13, class: "k-hit", tabindex: "0", role: "img", "aria-label": "Streefdatum " + (r.g.titel || "") + ": " + longDate(r.dl) + ", " + cd.text });
+        bindTip(hitD, function () { return koersTip(r, "dl"); });
+        svg.append(hitD);
+      }
+    });
+    box.replaceChildren(svg);
+  }
+  function renderKoersList(rows, list) {
+    list.replaceChildren(h("ul", { class: "koers-ul" }, rows.map(function (r) {
+      var cd = r.dl ? countdown(r.dl) : null;
+      return h("li", null,
+        h("div", { class: "koers-li-top" }, h("strong", { text: r.g.titel || "Doel" }), h("span", { class: "dd-sub" + (cd && cd.over ? " over" : ""), text: r.dl ? longDate(r.dl) + " · " + cd.text : "Geen streefdatum" })),
+        r.ms.length ? h("ul", { class: "koers-ms" }, r.ms.map(function (x) {
+          var c = x.d && !x.m.klaar ? countdown(x.d) : null;
+          return h("li", null, h("span", { text: (x.m.klaar ? "Gehaald: " : "") + x.m.tekst }), h("span", { class: "dd-sub" + (c && c.over ? " over" : ""), text: x.d ? dateShortY(x.d) + (c ? " · " + c.text : "") : "geen datum" }));
+        })) : null);
+    })));
+  }
+  // Overzicht: wat eraan komt (mijlpalen met een datum en streefdata), zodat je weekwerk een richting heeft.
+  function upcomingKoers(n) {
+    var out = [], t = dayNum(new Date());
+    goalsSorted().forEach(function (g) {
+      openMilestones(g).forEach(function (x) { if (x.d) out.push({ d: x.d, text: x.m.tekst, g: g, kind: "ms" }); });
+      var dl = parseYmd(g.deadline);
+      if (dl && dayNum(dl) >= t - 31) out.push({ d: dl, text: g.resultaat ? cut(g.resultaat, 90) : g.titel, g: g, kind: "dl" });
+    });
+    out.sort(function (a, b) { return a.d - b.d; });
+    return out.slice(0, n);
+  }
+  function renderOvKoers() {
+    var box = $("#ov-koers"); if (!box) return;
+    box.replaceChildren(h("div", { class: "panel-head" }, h("h2", { text: "Wat eraan komt" }), h("a", { class: "link-btn", href: "#doelen", text: "Je koers" })));
+    if (!S.loaded.doelen) { box.append(h("p", { class: "hint", text: "Laden…" })); return; }
+    var list = upcomingKoers(4);
+    if (!list.length) {
+      box.append(h("p", { class: "hint", text: "Geef je doelen een streefdatum en je mijlpalen een datum. Dan zie je hier wat er de komende maanden aankomt." }));
+      return;
+    }
+    box.append(h("ul", { class: "cal-list" }, list.map(function (x) {
+      var cd = countdown(x.d);
+      return h("li", { class: "cal" + (cd.over ? " over" : "") },
+        h("div", { class: "cal-date", "aria-hidden": "true" }, h("span", { class: "cal-day", text: String(x.d.getDate()) }), h("span", { class: "cal-mon", text: MONTHS[x.d.getMonth()] + (x.d.getFullYear() !== new Date().getFullYear() ? " '" + String(x.d.getFullYear()).slice(2) : "") })),
+        h("div", { class: "cal-body" },
+          h("div", { class: "cal-top" }, h("span", { class: "cal-kind", text: x.kind === "dl" ? "Streefdatum" : "Mijlpaal" }), h("span", { class: "cal-cd" + (cd.over ? " over" : ""), text: cd.text })),
+          h("strong", { class: "cal-what", text: x.text }),
+          h("span", { class: "cal-meta", text: x.g.titel || "" })));
+    })));
   }
 
   /* ---------- Logboek ---------- */
@@ -627,6 +1187,7 @@
       "Je bent de sparringpartner van " + naam + " in zijn persoonlijke dashboard Koersplan. Hij gebruikt het om te zien of hij op koers ligt met zijn doelen voor het komende jaar en om bij te sturen.",
       "Antwoord in het Nederlands, direct en concreet, als een eerlijke coach die meedenkt. Geen algemene motivatieteksten en geen lange lijsten met tips. Houd het kort, meestal onder de 150 woorden, tenzij hij om meer vraagt. Stel hooguit één vraag terug.",
       "Baseer je op de gegevens hieronder. Zeg eerlijk als iets onrealistisch is, als hij te veel tegelijk wil, of als een doel niet meetbaar is.",
+      "Hij wil progressief opbouwen (progressive overload): geleidelijk meer doen. Extra keren boven zijn plan tellen niet mee in de weekscore (die is per doel maximaal 100%) maar wel in zijn opbouw. Help hem met kleine stappen: één keer per week erbij als hij de lat een paar weken haalt of overschrijdt, en bij hoeveelheden (km, minuten) ongeveer 10% per week. Koppel wat hij elke week doet aan waarom hij het doet en aan zijn streefdata.",
       "Over beleggen: zijn handelsplan komt uit zijn eigen Handelsplan-site en staat hieronder samengevat. Help hem consequent volgens zijn eigen plan, niveaus en spelregels te handelen. Geef geen persoonlijk koop- of verkoopadvies en geen koersvoorspellingen. De marktcijfers zijn momentopnames met een datum, geen live koersen; zeg dat als hij ernaar vraagt.",
       S.toolsOk
         ? "Als een concrete wijziging helpt (een doel scherper formuleren, een wekelijkse actie aanpassen, een nieuw doel, of iets vastleggen in het logboek), stel die dan voor met de tools, hooguit drie per antwoord. Hij beslist zelf of hij ze toepast. Noem in je tekst kort wat je voorstelt. Gebruik de doel_id's en actie_id's uit de gegevens."
@@ -654,16 +1215,21 @@
     if (!gs.length) L.push("(nog geen doelen)");
     gs.forEach(function (g) {
       L.push("## " + (g.titel || "Naamloos") + " [doel_id: " + g.id + "]" + (g.categorie ? " · " + g.categorie : ""));
+      if (g.kort) L.push("Waarom in één zin: " + cut(g.kort, 160));
       if (g.waarom) L.push("Waarom: " + cut(g.waarom, 400));
       L.push("Resultaat: " + (g.resultaat ? cut(g.resultaat, 300) : "nog niet vastgelegd"));
-      L.push("Deadline: " + (g.deadline || "geen"));
+      var dlx = parseYmd(g.deadline);
+      L.push("Streefdatum: " + (dlx ? g.deadline + " (" + countdown(dlx).text + ")" : "geen"));
       var acts = (g.acties || []).map(function (a) {
-        var it = curItems[a.id];
-        return a.tekst + ", " + a.perWeek + "× per week [actie_id: " + a.id + "]" + (it ? " (deze week " + Math.min(it.gedaan, it.target) + "/" + it.target + ")" : "");
+        var it = curItems[a.id], unit = unitOf(a), tr = actionTrend(a.id, unit, Number(a.perWeek) || 0);
+        var ser = actionSeries(a.id, 9, unit).filter(function (p) { return p.state === "past" && p.v != null; });
+        var now = it ? " (deze week " + it.gedaan + "/" + it.target + (extraOf(it) ? ", waarvan " + extraOf(it) + " extra" : "") + (unit && it.hoeveel != null ? ", " + fmtAmount(Number(it.hoeveel)) + " " + unit : "") + ")" : "";
+        return a.tekst + ", " + a.perWeek + "× per week" + (unit ? ", eenheid " + unit : "") + " [actie_id: " + a.id + "]" + now +
+          "; opbouw: " + trendText(tr).toLowerCase() + (ser.length ? " (afgelopen weken: " + ser.map(function (p) { return fmtAmount(p.v); }).join(", ") + (unit ? " " + unit : "") + ")" : "");
       });
       L.push("Wekelijkse acties: " + (acts.length ? acts.join("; ") : "geen"));
       var ms = g.mijlpalen || [];
-      if (ms.length) L.push("Mijlpalen: " + ms.map(function (m) { return (m.klaar ? "[klaar] " : "[open] ") + m.tekst; }).join("; "));
+      if (ms.length) L.push("Mijlpalen: " + ms.map(function (m) { return (m.klaar ? "[klaar] " : m.datum ? "[open, voor " + m.datum + "] " : "[open] ") + m.tekst; }).join("; "));
       var a4 = goalAvg4(g.id);
       L.push("Gemiddeld laatste 4 afgeronde weken: " + (a4 == null ? "nog geen data" : pct(a4)));
     });
@@ -749,14 +1315,14 @@
     Array.prototype.forEach.call(document.querySelectorAll(".sug"), function (x) { x.disabled = b; });
   }
   function proposalText(p) {
-    var F = { titel: "Titel", waarom: "Waarom", resultaat: "Resultaat", deadline: "Deadline" };
+    var F = { titel: "Titel", waarom: "Waarom", kort: "Waarom in één zin", resultaat: "Resultaat", deadline: "Streefdatum" };
     var g = p.doel && S.goals[p.doel];
     if (p.type === "doel") return { title: F[p.veld] + " aanpassen", sub: g ? g.titel : "", body: p.waarde || "(leeg)" };
     if (p.type === "actie") {
       var t = p.perWeek === 0 ? "Actie verwijderen" : p.actie ? "Actie aanpassen" : "Actie toevoegen";
-      return { title: t, sub: g ? g.titel : "", body: p.perWeek === 0 ? (p.tekst || "") : (p.tekst || "") + " · " + p.perWeek + "× per week" };
+      return { title: t, sub: g ? g.titel : "", body: p.perWeek === 0 ? (p.tekst || "") : (p.tekst || "") + " · " + p.perWeek + "× per week" + (p.eenheid ? " · in " + p.eenheid : "") };
     }
-    if (p.type === "nieuw") return { title: "Nieuw doel", sub: p.categorie || "", body: p.titel + (p.acties && p.acties.length ? "\nElke week: " + p.acties.map(function (a) { return a.tekst + " (" + a.perWeek + "×)"; }).join(", ") : "") };
+    if (p.type === "nieuw") return { title: "Nieuw doel", sub: p.categorie || "", body: p.titel + (p.kort ? "\nWaarom: " + p.kort : "") + (p.acties && p.acties.length ? "\nElke week: " + p.acties.map(function (a) { return a.tekst + " (" + a.perWeek + "×" + (a.eenheid ? ", " + a.eenheid : "") + ")"; }).join(", ") : "") };
     return { title: "Vastleggen in logboek", sub: g ? g.titel : "", body: p.tekst };
   }
   function renderProposal(target, p) {
@@ -786,13 +1352,16 @@
         var i = -1; b.acties.forEach(function (a, j) { if (a.id === p.actie) i = j; });
         if (i < 0) { toast("Deze actie bestaat niet meer."); return false; }
         if (p.perWeek === 0) b.acties.splice(i, 1);
-        else b.acties[i] = Object.assign({}, b.acties[i], { tekst: p.tekst || b.acties[i].tekst, perWeek: p.perWeek });
-      } else b.acties.push({ id: rid("a"), tekst: p.tekst, perWeek: p.perWeek });
+        else {
+          b.acties[i] = Object.assign({}, b.acties[i], { tekst: p.tekst || b.acties[i].tekst, perWeek: p.perWeek });
+          if (p.eenheid != null) { if (p.eenheid) b.acties[i].eenheid = p.eenheid; else delete b.acties[i].eenheid; }
+        }
+      } else b.acties.push(Object.assign({ id: rid("a"), tekst: p.tekst, perWeek: p.perWeek }, p.eenheid ? { eenheid: p.eenheid } : {}));
       b.concept = false; b.bijgewerkt = new Date().toISOString();
       S.goals[p.doel] = b; queueWrite("doelen/" + p.doel, b, 0);
     } else if (p.type === "nieuw") {
       id = rid("d");
-      b = { titel: p.titel, categorie: p.categorie || "", waarom: p.waarom || "", resultaat: p.resultaat || "", deadline: "", acties: (p.acties || []).map(function (a) { return { id: rid("a"), tekst: a.tekst, perWeek: a.perWeek }; }), mijlpalen: [], volgorde: nextOrder(), concept: false, bijgewerkt: new Date().toISOString() };
+      b = { titel: p.titel, categorie: p.categorie || "", waarom: p.waarom || "", kort: p.kort || "", resultaat: p.resultaat || "", deadline: "", acties: (p.acties || []).map(function (a) { return Object.assign({ id: rid("a"), tekst: a.tekst, perWeek: a.perWeek }, a.eenheid ? { eenheid: a.eenheid } : {}); }), mijlpalen: [], volgorde: nextOrder(), concept: false, bijgewerkt: new Date().toISOString() };
       S.goals[id] = b; queueWrite("doelen/" + id, b, 0);
     } else if (p.type === "notitie") {
       addNote(p.tekst, "inzicht", p.doel && S.goals[p.doel] ? p.doel : null);
@@ -814,13 +1383,13 @@
     return [
       {
         name: "doel_wijzigen",
-        description: "Stel voor om één veld van een bestaand doel te wijzigen: titel, waarom, resultaat of deadline (JJJJ-MM-DD, leeg voor geen). De gebruiker ziet het voorstel en beslist zelf. Geeft een bevestiging terug.",
-        inputSchema: { type: "object", properties: { doel_id: { type: "string" }, veld: { type: "string", enum: ["titel", "waarom", "resultaat", "deadline"] }, nieuwe_waarde: { type: "string" }, reden: { type: "string", description: "Eén korte zin waarom." } }, required: ["doel_id", "veld", "nieuwe_waarde"] },
+        description: "Stel voor om één veld van een bestaand doel te wijzigen: titel, waarom, kort (waarom in één zin, die hij elke week ziet), resultaat of deadline (streefdatum JJJJ-MM-DD, leeg voor geen). De gebruiker ziet het voorstel en beslist zelf. Geeft een bevestiging terug.",
+        inputSchema: { type: "object", properties: { doel_id: { type: "string" }, veld: { type: "string", enum: ["titel", "waarom", "kort", "resultaat", "deadline"] }, nieuwe_waarde: { type: "string" }, reden: { type: "string", description: "Eén korte zin waarom." } }, required: ["doel_id", "veld", "nieuwe_waarde"] },
         execute: function (inp) {
           goalOf(inp.doel_id);
           var veld = txt(inp.veld, 20);
-          if (["titel", "waarom", "resultaat", "deadline"].indexOf(veld) < 0) throw new Error("veld moet titel, waarom, resultaat of deadline zijn.");
-          var val = txt(inp.nieuwe_waarde, veld === "titel" ? 120 : 1200);
+          if (["titel", "waarom", "kort", "resultaat", "deadline"].indexOf(veld) < 0) throw new Error("veld moet titel, waarom, kort, resultaat of deadline zijn.");
+          var val = txt(inp.nieuwe_waarde, veld === "titel" ? 120 : veld === "kort" ? 140 : 1200);
           if (veld === "titel" && !val) throw new Error("Een titel mag niet leeg zijn.");
           if (veld === "deadline" && val && !parseYmd(val)) throw new Error("Een deadline schrijf je als JJJJ-MM-DD.");
           return push({ type: "doel", doel: String(inp.doel_id), veld: veld, waarde: val, reden: txt(inp.reden, 300) });
@@ -828,23 +1397,23 @@
       },
       {
         name: "actie_wijzigen",
-        description: "Stel voor om een wekelijkse actie van een doel toe te voegen (laat actie_id weg), aan te passen (met actie_id) of te verwijderen (per_week 0). per_week is hoe vaak per week, 0 tot 14. De gebruiker beslist zelf.",
-        inputSchema: { type: "object", properties: { doel_id: { type: "string" }, actie_id: { type: "string" }, tekst: { type: "string" }, per_week: { type: "integer", minimum: 0, maximum: 14 }, reden: { type: "string" } }, required: ["doel_id", "per_week"] },
+        description: "Stel voor om een wekelijkse actie van een doel toe te voegen (laat actie_id weg), aan te passen (met actie_id) of te verwijderen (per_week 0). per_week is hoe vaak per week, 0 tot 14. eenheid is optioneel (bijv. km of min); dan vult hij per week ook de hoeveelheid in. De gebruiker beslist zelf.",
+        inputSchema: { type: "object", properties: { doel_id: { type: "string" }, actie_id: { type: "string" }, tekst: { type: "string" }, per_week: { type: "integer", minimum: 0, maximum: 14 }, eenheid: { type: "string" }, reden: { type: "string" } }, required: ["doel_id", "per_week"] },
         execute: function (inp) {
           var g = goalOf(inp.doel_id), aid = txt(inp.actie_id, 40), n = perW(inp.per_week), tekst = txt(inp.tekst, 120), a = null;
           if (aid) { (g.acties || []).forEach(function (x) { if (x.id === aid) a = x; }); if (!a) throw new Error("Onbekend actie_id voor dit doel."); }
           else if (!tekst || n === 0) throw new Error("Een nieuwe actie heeft tekst en per_week van minstens 1 nodig.");
-          return push({ type: "actie", doel: String(inp.doel_id), actie: aid || null, tekst: tekst || (a && a.tekst) || "", perWeek: n, reden: txt(inp.reden, 300) });
+          return push({ type: "actie", doel: String(inp.doel_id), actie: aid || null, tekst: tekst || (a && a.tekst) || "", perWeek: n, eenheid: inp.eenheid == null ? null : txt(inp.eenheid, 12), reden: txt(inp.reden, 300) });
         }
       },
       {
         name: "doel_toevoegen",
-        description: "Stel een nieuw doel voor met titel, categorie, waarom, meetbaar resultaat en wekelijkse acties. Alleen als het echt ontbreekt. De gebruiker beslist zelf.",
-        inputSchema: { type: "object", properties: { titel: { type: "string" }, categorie: { type: "string" }, waarom: { type: "string" }, resultaat: { type: "string" }, acties: { type: "array", items: { type: "object", properties: { tekst: { type: "string" }, per_week: { type: "integer", minimum: 1, maximum: 14 } }, required: ["tekst", "per_week"] } }, reden: { type: "string" } }, required: ["titel"] },
+        description: "Stel een nieuw doel voor met titel, categorie, waarom, kort (waarom in één zin), meetbaar resultaat en wekelijkse acties (eventueel met eenheid). Alleen als het echt ontbreekt. De gebruiker beslist zelf.",
+        inputSchema: { type: "object", properties: { titel: { type: "string" }, categorie: { type: "string" }, waarom: { type: "string" }, kort: { type: "string" }, resultaat: { type: "string" }, acties: { type: "array", items: { type: "object", properties: { tekst: { type: "string" }, per_week: { type: "integer", minimum: 1, maximum: 14 }, eenheid: { type: "string" } }, required: ["tekst", "per_week"] } }, reden: { type: "string" } }, required: ["titel"] },
         execute: function (inp) {
           var titel = txt(inp.titel, 120); if (!titel) throw new Error("Een doel heeft een titel nodig.");
-          var acties = (Array.isArray(inp.acties) ? inp.acties : []).slice(0, 4).map(function (a) { return { tekst: txt(a && a.tekst, 120), perWeek: Math.max(1, perW(a && a.per_week)) }; }).filter(function (a) { return a.tekst; });
-          return push({ type: "nieuw", titel: titel, categorie: txt(inp.categorie, 30), waarom: txt(inp.waarom, 1200), resultaat: txt(inp.resultaat, 600), acties: acties, reden: txt(inp.reden, 300) });
+          var acties = (Array.isArray(inp.acties) ? inp.acties : []).slice(0, 4).map(function (a) { return { tekst: txt(a && a.tekst, 120), perWeek: Math.max(1, perW(a && a.per_week)), eenheid: txt(a && a.eenheid, 12) }; }).filter(function (a) { return a.tekst; });
+          return push({ type: "nieuw", titel: titel, categorie: txt(inp.categorie, 30), waarom: txt(inp.waarom, 1200), kort: txt(inp.kort, 140), resultaat: txt(inp.resultaat, 600), acties: acties, reden: txt(inp.reden, 300) });
         }
       },
       {
@@ -1386,6 +1955,53 @@
   function tipRow(kind, color, value, label) {
     return h("div", { class: "tip-r" }, h("span", { class: kind, style: "background:" + color }), h("strong", { text: value }), h("span", { text: label }));
   }
+  function actTipRows(p, unit, label) {
+    var rows = [h("div", { class: "tip-h", text: (label ? cut(label, 40) + " · " : "") + "week " + isoWeek(p.mon).week + " · " + rangeLabel(p.mon) })];
+    if (p.v == null) { rows.push(h("div", { text: p.state === "pre" ? "Voor je eerste week in Koersplan" : p.state === "current" ? "Nog niets ingevuld" : "Niet ingevuld" })); return rows; }
+    var lopend = p.state === "current" ? ", lopend" : "";
+    if (unit) {
+      rows.push(tipRow("kb", "var(--s1)", fmtAmount(p.v) + " " + unit, "totaal" + lopend));
+      if (p.gedaan != null) rows.push(h("div", { class: "tip-sub", text: p.gedaan + "× gedaan" + (p.target ? ", plan " + p.target + "×" : "") }));
+    } else {
+      rows.push(tipRow("kb", "var(--s1)", p.v + "×", "gedaan" + lopend));
+      if (p.target) rows.push(tipRow("k", "var(--ink)", p.target + "×", "plan"));
+      if (p.target && p.v > p.target) rows.push(h("div", { class: "tip-sub", text: "+" + (p.v - p.target) + " extra boven je plan" }));
+    }
+    return rows;
+  }
+  function bindTip(el, rowsFn) {
+    function show(ev) { showTip(ev.clientX, ev.clientY, rowsFn()); }
+    el.addEventListener("pointerenter", show);
+    el.addEventListener("pointermove", show);
+    el.addEventListener("pointerleave", hideTip);
+    el.addEventListener("focus", function () { var rc = el.getBoundingClientRect(); showTip(rc.left + rc.width / 2, rc.bottom, rowsFn()); });
+    el.addEventListener("blur", hideTip);
+  }
+  function seriesLabel(ser, unit) {
+    var vals = ser.filter(function (p) { return p.state !== "pre"; }).map(function (p) { return p.v == null ? "niet ingevuld" : fmtAmount(p.v) + (unit ? " " + unit : "×"); });
+    var last = vals.pop();
+    return "Laatste weken: " + (vals.length ? vals.join(", ") + "; " : "") + "deze week " + last;
+  }
+  // Kleine kolommengrafiek per actie: elke staaf is een week, het streepje je plan voor die week.
+  function sparkSvg(ser, unit, label) {
+    var n = ser.length, bw = 7, gap = 3, H = 28, top = 3, W = n * (bw + gap) - gap;
+    var max = 0;
+    ser.forEach(function (p) { if (p.v != null) max = Math.max(max, p.v); if (!unit && p.target) max = Math.max(max, p.target); });
+    if (max <= 0) max = 1;
+    function y(v) { return H - (H - top) * v / max; }
+    var svg = sv("svg", { class: "spark", viewBox: "0 0 " + W + " " + H, width: W, height: H, role: "img", "aria-label": label + ". " + seriesLabel(ser, unit) });
+    ser.forEach(function (p, i) {
+      var x = i * (bw + gap);
+      if (p.v == null) { if (p.state === "past") svg.append(sv("rect", { x: x, y: H - 2, width: bw, height: 2, rx: 1, class: "sp-none" })); }
+      else if (p.v <= 0) svg.append(sv("rect", { x: x, y: H - 1.5, width: bw, height: 1.5, class: "sp-bar" + (p.state === "current" ? " cur" : "") }));
+      else svg.append(sv("path", { d: topRounded(x, y(p.v), bw, H - y(p.v), 2), class: "sp-bar" + (p.state === "current" ? " cur" : "") }));
+      if (!unit && p.target && p.v != null) svg.append(sv("line", { x1: x - 1, x2: x + bw + 1, y1: y(p.target), y2: y(p.target), class: "sp-tgt" }));
+      var hit = sv("rect", { x: x - gap / 2, y: 0, width: bw + gap, height: H, fill: "transparent" });
+      bindTip(hit, function () { return actTipRows(p, unit, label); });
+      svg.append(hit);
+    });
+    return svg;
+  }
   function weekTipRows(d) {
     var rows = [h("div", { class: "tip-h", text: "Week " + isoWeek(d.mon).week + " · " + rangeLabel(d.mon) })];
     if (d.state === "future") rows.push(h("div", { text: "Nog te gaan" }));
@@ -1566,10 +2182,13 @@
     var gs = goalsSorted(), any = false;
     gs.forEach(function (g) {
       var a = goalAvg4(g.id); if (a != null) any = true;
+      var ser = goalSeries(g, 9), ex = 0;
+      ser.slice(-5, -1).forEach(function (p) { if (p.v != null && p.target) ex += Math.max(0, p.v - p.target); });
       pg.append(h("div", { class: "pg-row" },
         h("span", { class: "pg-name", text: g.titel || "Doel" }),
         h("div", { class: "alloc-track", "aria-hidden": "true" }, a != null ? h("i", { style: "width:" + Math.max(0.6, a).toFixed(1) + "%" }) : null),
-        h("span", { class: "alloc-val", text: pct(a) })));
+        h("span", { class: "alloc-val", text: pct(a) }),
+        h("span", { class: "pg-trend" }, trendChip(trendOf(ser, { plan: (g.acties || []).reduce(function (t, a) { return t + (Number(a && a.perWeek) || 0); }, 0) })), ex ? h("span", { class: "xtra", title: "Extra keren boven je plan in de laatste 4 afgeronde weken", text: "+" + ex + " extra" }) : null)));
     });
     if (!gs.length) pg.append(h("p", { class: "hint", text: "Nog geen doelen." }));
     else if (!any) pg.prepend(h("p", { class: "hint", text: "Per doel zie je hier je gemiddelde zodra je eerste week is afgerond." }));
@@ -1582,6 +2201,7 @@
   function renderAll(force) {
     renderHeader();
     renderOverview();
+    renderOvKoers();
     renderOvHp();
     renderGoals(force);
     renderNotes();
@@ -1603,6 +2223,7 @@
     if (v === "overzicht") renderOverview();
     if (v === "jaar") renderYear();
     if (v === "investeren") renderHistChart();
+    if (v === "doelen") { renderKoers(); drawObCharts(); }
     if (changed) window.scrollTo(0, 0);
   }
 
@@ -1672,7 +2293,7 @@
     window.addEventListener("hashchange", route);
     var rt;
     window.addEventListener("resize", function () {
-      clearTimeout(rt); rt = setTimeout(function () { if (S.view === "jaar") renderYearChart(yearSeries()); if (S.view === "investeren") renderHistChart(); }, 150);
+      clearTimeout(rt); rt = setTimeout(function () { if (S.view === "jaar") renderYearChart(yearSeries()); if (S.view === "investeren") renderHistChart(); if (S.view === "doelen") { renderKoers(); drawObCharts(); } }, 150);
     });
     window.addEventListener("scroll", hideTip, { passive: true });
   }

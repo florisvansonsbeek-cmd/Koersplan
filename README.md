@@ -2,10 +2,17 @@
 
 Persoonlijk dashboard om te zien of je op koers ligt met je toekomst:
 
-- **Overzicht**: je weekscore (hoeveel van je geplande acties je hebt afgevinkt, gemiddeld over je doelen), afvinken per doel en je handelsplan in het kort.
-- **Doelen**: je doelen voor dit jaar, waarom ze je verder brengen, mijlpalen, een logboek en sparren met Claude.
+- **Overzicht**: je weekscore (hoeveel van je geplande acties je hebt afgevinkt, gemiddeld over je doelen) en afvinken per doel. Bij elk doel zie je in één oogopslag waarom je het doet, waar het naartoe gaat en hoe lang je nog hebt, de volgende mijlpaal, en per actie een minigrafiek van je laatste weken met of je opbouwt. Deed je meer dan gepland, dan tik je op **+** voor een extra keer. Rechts staat wat eraan komt (mijlpalen en streefdata) en je handelsplan in het kort.
+- **Doelen**: je koers als tijdlijn van nu tot je verste streefdatum, je doelen met waarom, resultaat, streefdatum en mijlpalen (met datum), per actie een opbouwgrafiek, een logboek en sparren met Claude.
 - **Beleggen**: je handelsplan uit [Handelsplan](#koppeling-met-handelsplan) (regime, wat je per positie doet en bij welke niveaus, signalen, komende momenten, scenario's, spelregels en marktcijfers), plus je eigen portfolio, inleg per maand en een marktlogboek. Geen koop- of verkoopadvies.
-- **Jaar**: jaaragenda met een score per week, het verloop, en per doel hoe je ervoor staat.
+- **Jaar**: jaaragenda met een score per week, het verloop, en per doel je uitvoering en opbouw.
+
+## Extra keren en opbouw
+
+- **Extra keren.** Heb je alle geplande keren van een actie afgevinkt, dan verschijnt een **+**. Daarmee log je wat je méér deed dan gepland. Een extra vakje tik je aan om het weer weg te halen. Je weekscore blijft per doel maximaal 100%, zodat een extra training geen gemiste focusblokken wegpoetst; de extra keren tellen wel mee voor je opbouw.
+- **Opbouw (progressive overload).** Per actie kijkt de app naar de trendlijn door je laatste (maximaal 8) afgeronde weken, extra keren meegeteld. *Opbouw* betekent dat je over vier weken gemeten minstens een halve keer per week meer doet (of 10% van je plan, als dat meer is), *Terugval* het omgekeerde, anders *Stabiel*. Weken die je niet invulde tellen niet mee als nul.
+- **Eenheid.** Geef een actie een eenheid, bijvoorbeeld km of min. Dan vul je elke week ook de hoeveelheid in en gaat je opbouw over die hoeveelheid (Opbouw vanaf 10% over vier weken). Je ziet dan ook een rustige volgende stap: vorige week plus 10%.
+- **De lat bijstellen.** Deed je twee van de laatste drie weken meer dan gepland (en haalde je je plan elke week), dan stelt de app voor om de lat één keer per week te verhogen. Zat je drie weken op rij onder de helft, dan stelt hij een haalbare lat voor. Jij beslist; *Nu niet* verbergt de suggestie voor deze week.
 
 De app is één Node-server (`server.js`) met Postgres als opslag. Inloggen gaat met één wachtwoord dat je zelf in Railway instelt. Het ontwerp hoort bij dezelfde familie als Handelsplan; de lettertypen (Bricolage Grotesque, IBM Plex Sans en IBM Plex Mono, open source onder de OFL) worden door de app zelf geserveerd.
 
@@ -43,14 +50,14 @@ Koersplan leest je plan uit Handelsplan; het schrijft er niets in terug.
 
 ## Doelen in één keer vervangen
 
-Zet bij Variables `DOELEN_IMPORT` op JSON in de vorm `{"doelen": {"id": {titel, categorie, waarom, resultaat, deadline, acties, mijlpalen, volgorde}}}`. Bij de volgende start vervangt de app al je doelen door deze lijst. De oude doelen komen als back-up in `app_meta`. Dezelfde inhoud wordt maar één keer toegepast, dus de variabele mag blijven staan. Je weekscores van afgelopen weken blijven bewaard.
+Zet bij Variables `DOELEN_IMPORT` op JSON in de vorm `{"doelen": {"id": {titel, categorie, waarom, kort, resultaat, deadline, acties, mijlpalen, volgorde}}}`. Hierin is `kort` je waarom in één zin, `deadline` de streefdatum (`JJJJ-MM-DD`), een actie `{id, tekst, perWeek, eenheid}` met een optionele eenheid zoals `"km"`, en een mijlpaal `{id, tekst, klaar, datum}` met een optionele datum. Bij de volgende start vervangt de app al je doelen door deze lijst. De oude doelen komen als back-up in `app_meta`. Dezelfde inhoud wordt maar één keer toegepast, dus de variabele mag blijven staan. Je weekscores van afgelopen weken blijven bewaard.
 
 ## Je gegevens in Postgres
 
 | Tabel | Inhoud |
 |---|---|
-| `doelen` | je doelen, met wekelijkse acties en mijlpalen |
-| `weken` | per week wat je hebt afgevinkt en je weekreflectie |
+| `doelen` | je doelen, met waarom in één zin, streefdatum, wekelijkse acties (eventueel met eenheid) en mijlpalen (eventueel met datum) |
+| `weken` | per week per actie hoe vaak je het deed (ook boven je plan), de hoeveelheid bij acties met een eenheid, en je weekreflectie |
 | `notities` | logboek en marktlogboek |
 | `invest` | portfolio, waardeverloop, inleg per maand en je maximum per positie |
 | `instellingen` | je naam en de startweek van je jaar |
