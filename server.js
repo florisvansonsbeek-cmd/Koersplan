@@ -492,12 +492,12 @@ function loginState(query) {
 const SPAR_TOOLS = [
   {
     name: "doel_wijzigen",
-    description: "Stel voor om één veld van een bestaand doel te wijzigen: titel, waarom, resultaat of deadline (JJJJ-MM-DD, leeg voor geen). De gebruiker ziet het voorstel en beslist zelf.",
+    description: "Stel voor om één veld van een bestaand doel te wijzigen: titel, waarom, kort (waarom in één zin, die hij elke week bij het afvinken ziet), resultaat of deadline (streefdatum JJJJ-MM-DD, leeg voor geen). De gebruiker ziet het voorstel en beslist zelf.",
     input_schema: {
       type: "object",
       properties: {
         doel_id: { type: "string" },
-        veld: { type: "string", enum: ["titel", "waarom", "resultaat", "deadline"] },
+        veld: { type: "string", enum: ["titel", "waarom", "kort", "resultaat", "deadline"] },
         nieuwe_waarde: { type: "string" },
         reden: { type: "string", description: "Eén korte zin waarom." },
       },
@@ -506,7 +506,7 @@ const SPAR_TOOLS = [
   },
   {
     name: "actie_wijzigen",
-    description: "Stel voor om een wekelijkse actie van een doel toe te voegen (laat actie_id weg), aan te passen (met actie_id) of te verwijderen (per_week 0). per_week is hoe vaak per week, 0 tot 14. De gebruiker beslist zelf.",
+    description: "Stel voor om een wekelijkse actie van een doel toe te voegen (laat actie_id weg), aan te passen (met actie_id) of te verwijderen (per_week 0). per_week is hoe vaak per week, 0 tot 14. eenheid is optioneel (bijv. km of min): dan vult hij per week ook de hoeveelheid in en ziet hij zijn opbouw daarin; een lege eenheid haalt hem weg. De gebruiker beslist zelf.",
     input_schema: {
       type: "object",
       properties: {
@@ -514,6 +514,7 @@ const SPAR_TOOLS = [
         actie_id: { type: "string" },
         tekst: { type: "string" },
         per_week: { type: "integer", minimum: 0, maximum: 14 },
+        eenheid: { type: "string", description: "Optioneel, bijv. km, min, uur, kg. Weglaten om niets te veranderen." },
         reden: { type: "string" },
       },
       required: ["doel_id", "per_week"],
@@ -521,19 +522,20 @@ const SPAR_TOOLS = [
   },
   {
     name: "doel_toevoegen",
-    description: "Stel een nieuw doel voor met titel, categorie, waarom, meetbaar resultaat en wekelijkse acties. Alleen als het echt ontbreekt. De gebruiker beslist zelf.",
+    description: "Stel een nieuw doel voor met titel, categorie, waarom, kort (waarom in één zin), meetbaar resultaat en wekelijkse acties, eventueel met eenheid. Alleen als het echt ontbreekt. De gebruiker beslist zelf.",
     input_schema: {
       type: "object",
       properties: {
         titel: { type: "string" },
         categorie: { type: "string" },
         waarom: { type: "string" },
+        kort: { type: "string", description: "Waarom in één zin, maximaal 140 tekens." },
         resultaat: { type: "string" },
         acties: {
           type: "array",
           items: {
             type: "object",
-            properties: { tekst: { type: "string" }, per_week: { type: "integer", minimum: 1, maximum: 14 } },
+            properties: { tekst: { type: "string" }, per_week: { type: "integer", minimum: 1, maximum: 14 }, eenheid: { type: "string" } },
             required: ["tekst", "per_week"],
           },
         },
