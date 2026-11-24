@@ -129,6 +129,8 @@
       svg.append(sv("path", { d: "M4 14.5V2.2M4 2.6h8.3l-1.9 2.9 1.9 2.9H4", stroke: "currentColor", "stroke-width": 1.6, "stroke-linecap": "round", "stroke-linejoin": "round" }));
     } else if (kind === "step") {
       svg.append(sv("path", { d: "M8 1.8 14.2 8 8 14.2 1.8 8z", stroke: "currentColor", "stroke-width": 1.6, "stroke-linejoin": "round" }));
+    } else if (kind === "chev") {
+      svg.append(sv("path", { d: "M4.3 6.2 8 9.9l3.7-3.7", stroke: "currentColor", "stroke-width": 1.8, "stroke-linecap": "round", "stroke-linejoin": "round" }));
     } else {
       svg.append(sv("circle", { cx: 8, cy: 8, r: 6.2, stroke: "currentColor", "stroke-width": 1.6 }), sv("path", { d: "M8 4.8V8l2.1 1.4", stroke: "currentColor", "stroke-width": 1.6, "stroke-linecap": "round" }));
     }
@@ -729,57 +731,110 @@
     if (!S.db) { list.append(emptyBox(S.status === "loading" ? "Doelen laden…" : "Je doelen konden niet worden geladen.")); return; }
     if (!S.loaded.doelen) { list.append(emptyBox("Doelen laden…")); return; }
     if (!gs.length && S.editing !== "__new") list.append(emptyBox("Nog geen doelen. Begin met het doel dat dit jaar het meeste verschil maakt."));
-    gs.forEach(function (g) { list.append(S.editing === g.id ? goalForm() : goalCard(g)); });
+    if (gs.length) {
+      // Eén rustige lijst: per doel een regel met streefdatum, volgende mijlpaal en uitvoering. Open een doel voor de rest.
+      var led = h("div", { class: "gl" });
+      led.append(h("div", { class: "gl-cols", "aria-hidden": "true" }, h("span", { text: "Doel" }), h("span", { text: "Laatste 4 weken" })));
+      gs.forEach(function (g) { led.append(S.editing === g.id ? goalForm() : goalRow(g)); });
+      list.append(led);
+    }
     if (S.editing === "__new") list.append(goalForm());
-    if (S.view === "doelen") drawObCharts();
   }
-  function goalCard(g) {
-    var ms = (g.mijlpalen || []).filter(function (m) { return m && m.tekst; }), done = ms.filter(function (m) { return m.klaar; }).length;
-    var a4 = goalAvg4(g.id), writable = canWrite();
-    var acts = (g.acties || []).filter(function (a) { return a && a.tekst; });
+  // Openklappen past alleen de twee betrokken doelen aan, zodat de knop (en je focus) blijft staan.
+  function toggleGoal(id) {
+    var prev = S.openGoal;
+    S.openGoal = prev === id ? null : id;
+    if (prev && prev !== id) syncGoalItem(prev);
+    syncGoalItem(id);
+    var b = document.getElementById("gr-" + id);
+    if (b && S.openGoal) b.scrollIntoView({ block: "nearest" });
+  }
+  function syncGoalItem(gid) {
+    var item = document.getElementById("goal-" + gid), g = S.goals[gid];
+    if (!item || !g || !item.classList.contains("gl-item")) return;
+    var open = S.openGoal === gid, row = document.getElementById("gr-" + gid), det = document.getElementById("gd-" + gid);
+    item.classList.toggle("open", open);
+    if (row) row.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open && !det) item.append(goalDetail(Object.assign({ id: gid }, g), "gd-" + gid));
+    if (!open && det) det.remove();
+  }
+  // Eén regel per doel: categorie, titel, streefdatum, volgende mijlpaal en je uitvoering over de laatste 4 afgeronde weken.
+  function goalRow(g) {
+    var open = S.openGoal === g.id, did = "gd-" + g.id;
+    var a4 = goalAvg4(g.id), hasActs = (g.acties || []).some(function (a) { return a && a.tekst && Number(a.perWeek) > 0; });
     var dl = parseYmd(g.deadline), cd = dl ? countdown(dl) : null;
-    var kort = String(g.kort || "").trim();
-    var obWeeks = clamp(Math.round((thisMonday().getTime() - trackStart()) / (7 * 864e5)) + 1, 6, 12);
-    return h("article", { class: "g-card", id: "goal-" + g.id },
-      h("div", { class: "g-top" },
-        h("span", { class: "cat", text: g.categorie || "Doel" }),
-        g.concept ? h("span", { class: "tag-concept", text: "startversie" }) : null,
-        cd ? h("span", { class: "og-hz" + (cd.over ? " over" : ""), title: "Streefdatum " + longDate(dl) }, icon("flag"), h("span", { text: monthYear(dl) + " · " + cd.text })) : null,
-        a4 != null ? h("span", { class: "g-avg", title: "Gemiddelde uitvoering over je laatste 4 afgeronde weken, maximaal 100% per week", text: pct(a4) + " · laatste 4 wk" }) : null),
-      h("h3", { class: "g-title", text: g.titel || "Naamloos doel" }),
-      kort ? h("p", { class: "og-why g-kort", text: kort }) : null,
-      g.waarom ? h("div", { class: "g-why" }, h("span", { class: "label", text: "Waarom dit je verder brengt" }), h("p", { text: g.waarom })) : null,
-      h("dl", { class: "g-meta" },
-        h("div", null, h("dt", { text: "Resultaat" }), h("dd", { text: g.resultaat || "Nog niet vastgelegd" })),
-        h("div", null, h("dt", { text: "Streefdatum" }), h("dd", null, dl ? longDate(dl) : "Geen", cd ? h("span", { class: "dd-sub" + (cd.over ? " over" : ""), text: cd.text }) : null))),
-      acts.length ? h("div", { class: "g-acts" },
-        h("div", { class: "g-acts-head" }, h("span", { class: "label", text: "Elke week · opbouw per week" }),
-          h("div", { class: "legend", "aria-hidden": "true" },
-            h("span", null, h("i", { class: "sw", style: "background:var(--s1)" }), "gedaan"),
-            acts.some(function (a) { return !unitOf(a); }) ? h("span", null, h("i", { class: "ln", style: "background:var(--ink)" }), "plan") : null)),
-        h("ul", { class: "g-list-ul g-act-list" }, acts.map(function (a) {
-          var unit = unitOf(a), tr = actionTrend(a.id, unit, Number(a.perWeek) || 0), nd = writable ? nudgeFor(a) : null, guide = unit ? amountGuide(a) : null;
-          return h("li", { class: "g-act" },
-            h("div", { class: "g-act-top" }, h("span", { class: "g-act-t", text: a.tekst }), h("span", { class: "x", text: (Number(a.perWeek) || 0) + "× per week" + (unit ? " · in " + unit : "") })),
-            h("div", { class: "ob" },
-              h("div", { class: "ob-chart", "data-aid": a.id, "data-unit": unit, "data-label": a.tekst, "data-weeks": obWeeks }),
-              h("div", { class: "ob-side" }, trendChip(tr),
-                tr.from != null ? h("span", { class: "oa-note", text: "trend ~" + fmtAmount(tr.from) + " → ~" + fmtAmount(tr.to) + (unit ? " " + unit : "× per week") }) : null,
-                guide ? h("span", { class: "oa-note", text: "vorige week " + fmtAmount(guide.last) + " " + unit + ", volgende stap ~" + fmtAmount(guide.next) + " " + unit + " (+10%)" }) : null)),
-            nd ? nudgeBox(g, a, nd) : null);
-        })),
-        obTable(acts, obWeeks)) : null,
-      ms.length ? h("div", { class: "g-ms" }, h("span", { class: "label", text: "Mijlpalen " + done + "/" + ms.length }),
-        h("ul", { class: "g-list-ul" }, ms.map(function (m) {
-          var md = parseYmd(m.datum), mc = md && !m.klaar ? countdown(md) : null;
-          return h("li", null, h("label", null,
-            h("input", { type: "checkbox", id: "ms-" + g.id + "-" + m.id, checked: !!m.klaar, disabled: !writable, onchange: function (e) { toggleMs(g.id, m.id, e.target.checked); } }),
-            h("span", { class: "ms-t", text: m.tekst }),
-            md ? h("span", { class: "ms-d" + (mc && mc.over ? " over" : ""), text: dateShortY(md) + (mc ? " · " + mc.text : "") }) : null));
-        }))) : null,
-      h("div", { class: "g-foot" },
-        writable ? h("button", { class: "btn ghost sm", type: "button", text: "Bewerken", onclick: function () { startEdit(g.id); } }) : null,
-        S.sparOn ? h("button", { class: "link-btn", type: "button", text: "Spar over dit doel", onclick: function () { sparAbout('Help me met mijn doel "' + (g.titel || "") + '". '); } }) : null));
+    var ms = (g.mijlpalen || []).filter(function (m) { return m && m.tekst; }), nx = openMilestones(g)[0];
+    // Twee vaste regels onder de titel: de streefdatum (vlag) en de volgende mijlpaal (ruit), dezelfde tekens als op de tijdlijn.
+    var meta = h("span", { class: "gl-meta" },
+      dl ? h("span", { class: "gl-dl" + (cd.over ? " over" : ""), title: "Streefdatum " + longDate(dl) }, icon("flag"), h("span", { text: monthYear(dl) + ", " + cd.text }))
+        : h("span", { class: "gl-dl none" }, icon("flag"), h("span", { text: "geen streefdatum" })),
+      nx ? h("span", { class: "gl-nx", title: "Volgende mijlpaal" + (nx.d ? ", " + longDate(nx.d) : "") }, icon("step"),
+          h("span", { class: "gl-nx-t" }, nx.d ? h("span", { class: "gl-nx-d", text: dateShortY(nx.d) }) : null, nx.m.tekst))
+        : ms.length ? h("span", { class: "gl-nx done" }, icon("step"), h("span", { class: "gl-nx-t", text: "alle mijlpalen gehaald" })) : null);
+    var statText = a4 != null ? pct(a4) : hasActs ? "nieuw" : "–";
+    var stat = h("span", { class: "gl-stat", title: a4 != null ? "Gemiddelde uitvoering over je laatste 4 afgeronde weken, maximaal 100% per week" : hasActs ? "Na je eerste afgeronde week zie je hier je uitvoering" : "Nog geen wekelijkse acties" },
+      h("span", { class: "gl-pct" + (a4 == null ? " none" : ""), text: statText }),
+      h("span", { class: "meter gl-meter" }, h("span", { style: "width:" + (a4 == null ? 0 : clamp(a4, 0, 100)).toFixed(1) + "%" })));
+    var row = h("button", { type: "button", class: "gl-row", id: "gr-" + g.id, "aria-expanded": open ? "true" : "false", "aria-controls": did, onclick: function () { toggleGoal(g.id); } },
+      h("span", { class: "gl-cat", text: g.categorie || "Doel" }),
+      h("span", { class: "gl-main" }, h("span", { class: "gl-title", text: g.titel || "Naamloos doel" }), meta),
+      stat,
+      h("span", { class: "gl-chev" }, icon("chev")));
+    var item = h("article", { class: "gl-item" + (open ? " open" : ""), id: "goal-" + g.id }, h("h3", { class: "gl-h" }, row));
+    if (open) item.append(goalDetail(g, did));
+    return item;
+  }
+  function goalDetail(g, did) {
+    var writable = canWrite();
+    var box = h("div", { class: "gd", id: did, role: "region", "aria-labelledby": "gr-" + g.id });
+    // Waarom: je zin van één regel vooraan, de rest van je uitleg eronder (zonder die zin te herhalen).
+    var waarom = String(g.waarom || "").trim().replace(/\s+/g, " "), kort = String(g.kort || "").trim();
+    var lead = kort || firstSentence(waarom, 400), more = waarom;
+    var leadCore = lead.replace(/…$/, "");
+    if (leadCore && more.indexOf(leadCore) === 0) more = more.slice(leadCore.length).trim();
+    if (lead) box.append(h("div", { class: "gd-why" }, h("p", { class: "gd-lead", text: lead }), more ? h("p", { class: "gd-more", text: more }) : null));
+    else if (writable) box.append(h("p", { class: "gd-why gd-empty" }, h("button", { type: "button", class: "link-btn", text: "Waarom doe je dit? Leg het vast in één zin", onclick: function () { editGoalField(g.id, "kort"); } })));
+    if (String(g.resultaat || "").trim()) box.append(h("p", { class: "gd-res" }, h("span", { class: "gd-k", text: "Resultaat" }), h("span", { text: g.resultaat })));
+
+    var acts = (g.acties || []).filter(function (a) { return a && a.tekst; });
+    var sec = h("section", { class: "gd-sec", "aria-label": "Elke week" }, h("h4", { class: "gd-h", text: "Elke week" }));
+    if (acts.length) {
+      var weeks = clamp(Math.round((thisMonday().getTime() - trackStart()) / (7 * 864e5)) + 1, 6, 12);
+      sec.append(h("ul", { class: "gd-acts" }, acts.map(function (a) {
+        var unit = unitOf(a), plan = Number(a.perWeek) || 0, tr = actionTrend(a.id, unit, plan);
+        var guide = unit ? amountGuide(a) : null, nd = writable ? nudgeFor(a) : null;
+        return h("li", { class: "gd-act" },
+          h("div", { class: "gd-act-top" },
+            h("span", { class: "gd-act-t", text: a.tekst }),
+            h("span", { class: "gd-act-plan", text: plan + "× per week" + (unit ? ", in " + unit : "") })),
+          h("div", { class: "gd-act-ob" }, sparkSvg(actionSeries(a.id, 8, unit), unit, a.tekst, { bw: 10, H: 34 }), trendChip(tr),
+            guide ? h("span", { class: "oa-note", text: "vorige week " + fmtAmount(guide.last) + " " + unit + ", volgende stap ~" + fmtAmount(guide.next) + " " + unit }) : null),
+          nd ? nudgeBox(g, a, nd) : null);
+      })), obTable(acts, weeks));
+    } else sec.append(h("p", { class: "hint", text: "Nog geen wekelijkse acties. Voeg ze toe met Bewerken; die vink je elke week af op Overzicht." }));
+    box.append(sec);
+
+    var ms = (g.mijlpalen || []).filter(function (m) { return m && m.tekst; });
+    var done = ms.filter(function (m) { return m.klaar; }).length;
+    var msSec = h("section", { class: "gd-sec", "aria-label": "Mijlpalen" }, h("h4", { class: "gd-h" }, "Mijlpalen", ms.length ? h("span", { class: "gd-count", text: done + " van " + ms.length + " gehaald" }) : null));
+    if (ms.length) {
+      // Open mijlpalen op datum, gehaalde onderaan.
+      var order = openMilestones(g).map(function (x) { return x.m; }).concat(ms.filter(function (m) { return m.klaar; }));
+      msSec.append(h("ul", { class: "gd-ms" }, order.map(function (m) {
+        var md = parseYmd(m.datum), mc = md && !m.klaar ? countdown(md) : null, ko = m.klaar && parseYmd(m.klaarOp);
+        return h("li", { class: m.klaar ? "done" : "" }, h("label", null,
+          h("input", { type: "checkbox", id: "ms-" + g.id + "-" + m.id, checked: !!m.klaar, disabled: !writable, onchange: function (e) { toggleMs(g.id, m.id, e.target.checked); } }),
+          h("span", { class: "ms-t", text: m.tekst }),
+          m.klaar ? h("span", { class: "ms-d", text: ko ? "gehaald " + dateShortY(ko) : "gehaald" })
+            : md ? h("span", { class: "ms-d" + (mc && mc.over ? " over" : ""), text: dateShortY(md) + ", " + mc.text }) : null));
+      })));
+    } else msSec.append(h("p", { class: "hint", text: "Nog geen mijlpalen. Tussenstappen met een datum laten zien of je op schema ligt." }));
+    box.append(msSec);
+
+    box.append(h("div", { class: "gd-foot" },
+      writable ? h("button", { class: "btn ghost sm", type: "button", text: "Bewerken", onclick: function () { startEdit(g.id); } }) : null,
+      S.sparOn ? h("button", { class: "link-btn", type: "button", text: "Spar over dit doel", onclick: function () { sparAbout('Help me met mijn doel "' + (g.titel || "") + '". '); } }) : null));
+    return box;
   }
   function obTable(acts, n) {
     var cols = acts.map(function (a) { return { a: a, unit: unitOf(a), ser: actionSeries(a.id, n, unitOf(a)) }; });
@@ -793,49 +848,10 @@
           return h("td", { class: "n", text: p.v == null ? "–" : c.unit ? fmtAmount(p.v) + " " + c.unit + (p.gedaan != null ? " (" + p.gedaan + "×)" : "") : p.v + "/" + (p.target || 0) });
         })));
     }
-    return h("details", { class: "tbl" }, h("summary", { text: "Toon opbouw als tabel" }),
+    return h("details", { class: "tbl" }, h("summary", { text: "Opbouw per week als tabel" }),
       h("div", { class: "tbl-wrap" }, h("table", null,
         h("thead", null, h("tr", null, h("th", { text: "Week" }), h("th", { text: "Datum" }), cols.map(function (c) { return h("th", { text: cut(c.a.tekst, 28) }); }))),
         h("tbody", null, rows))));
-  }
-  // Grotere opbouwgrafiek op de doelkaart; wordt getekend zodra de kaart in de pagina staat en zijn breedte kent.
-  function drawObCharts() {
-    Array.prototype.forEach.call(document.querySelectorAll("#g-list .ob-chart"), function (box) {
-      var W = Math.floor(box.clientWidth); if (!W) return;
-      var unit = box.dataset.unit || "", label = box.dataset.label || "", n = Number(box.dataset.weeks) || 12;
-      box.replaceChildren(obChart(actionSeries(box.dataset.aid, n, unit), unit, label, Math.max(220, W)));
-    });
-  }
-  function obChart(ser, unit, label, W) {
-    var H = 92, m = { l: 30, r: 4, t: 10, b: 20 }, pw = W - m.l - m.r, ph = H - m.t - m.b;
-    var n = ser.length, slot = pw / n, bw = clamp(slot - 6, 3, 24);
-    var max = 0;
-    ser.forEach(function (p) { if (p.v != null) max = Math.max(max, p.v); if (!unit && p.target) max = Math.max(max, p.target); });
-    var top = max <= 0 ? 1 : max <= 4 ? Math.ceil(max) : max <= 10 ? Math.ceil(max / 2) * 2 : Math.ceil(max / 5) * 5;
-    function y(v) { return m.t + ph * (1 - v / top); }
-    function cx(i) { return m.l + slot * i + slot / 2; }
-    var svg = sv("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": label + ", opbouw per week. " + seriesLabel(ser, unit) + ". De tabel onder de kaart toont dezelfde waarden." });
-    [0, top].forEach(function (v, k) {
-      svg.append(sv("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: k === 0 ? "c-base" : "c-grid" }));
-      svg.append(sv("text", { x: m.l - 6, y: y(v) + 3.5, class: "c-tick", "text-anchor": "end" }, unit ? fmtAmount(v) : String(v)));
-    });
-    ser.forEach(function (p, i) {
-      var x = cx(i) - bw / 2, cls = "c-bar" + (p.state === "current" ? " cur" : "");
-      if (p.v == null) { if (p.state === "past") svg.append(sv("rect", { x: x, y: y(0) - 3, width: bw, height: 3, class: "c-none" })); }
-      else if (p.v <= 0) svg.append(sv("rect", { x: x, y: y(0) - 1.5, width: bw, height: 1.5, class: cls }));
-      else svg.append(sv("path", { d: topRounded(x, y(Math.min(p.v, top)), bw, y(0) - y(Math.min(p.v, top)), 4), class: cls }));
-      if (!unit && p.target && p.v != null) svg.append(sv("line", { x1: x - 3, x2: x + bw + 3, y1: y(p.target), y2: y(p.target), class: "c-tgt" }));
-    });
-    svg.append(sv("text", { x: cx(0), y: H - 5, class: "c-tick", "text-anchor": "middle" }, "wk " + isoWeek(ser[0].mon).week));
-    var mid = Math.floor(n / 2);
-    if (slot * mid > 60) svg.append(sv("text", { x: cx(mid), y: H - 5, class: "c-tick", "text-anchor": "middle" }, "wk " + isoWeek(ser[mid].mon).week));
-    svg.append(sv("text", { x: cx(n - 1), y: H - 5, class: "c-tick", "text-anchor": "middle" }, "nu"));
-    ser.forEach(function (p, i) {
-      var hit = sv("rect", { x: m.l + slot * i, y: 0, width: slot, height: H, fill: "transparent" });
-      bindTip(hit, function () { return actTipRows(p, unit, ""); });
-      svg.append(hit);
-    });
-    return svg;
   }
   function startEdit(id) {
     var g = S.goals[id]; if (!g) return;
@@ -968,6 +984,8 @@
     renderGoals();
     renderOverview();
     renderOvKoers();
+    var cb = document.getElementById("ms-" + gid + "-" + mid);
+    if (cb && S.view === "doelen") cb.focus({ preventScroll: true });
   }
 
   /* ---------- Koers: je doelen op een tijdlijn naar de toekomst ---------- */
@@ -1024,7 +1042,7 @@
     var tMax = t0 + 182 * 864e5;
     rows.forEach(function (r) { if (r.dl) tMax = Math.max(tMax, r.dl.getTime()); r.ms.forEach(function (x) { if (x.d) tMax = Math.max(tMax, x.d.getTime()); }); });
     var span = tMax - t0, tStart = t0 - span * 0.045, tEnd = tMax + span * 0.01;
-    var labelW = narrow ? 0 : Math.min(250, Math.round(W * 0.27)), x0 = narrow ? 6 : labelW + 18, x1 = W - (narrow ? 64 : 76);
+    var labelW = narrow ? 0 : Math.min(250, Math.round(W * 0.27)), x0 = narrow ? 6 : labelW + 18, x1 = W - (narrow ? 70 : 76);
     function X(t) { return x0 + (x1 - x0) * (clamp(t, tStart, tEnd) - tStart) / (tEnd - tStart); }
     var axisH = 28, laneH = narrow ? 62 : 52, H = axisH + rows.length * laneH + 4;
     var svg = sv("svg", { viewBox: "0 0 " + W + " " + H, class: "koers-svg", role: "group", "aria-label": "Tijdlijn van je doelen, van nu tot " + monthYear(new Date(tMax)) + ". De lijst eronder toont dezelfde data." });
@@ -1054,7 +1072,11 @@
         var xd = X(r.dl.getTime());
         svg.append(sv("line", { x1: Math.min(xNow, xd), x2: Math.max(xNow, xd), y1: cy, y2: cy, class: "k-track" }));
       } else {
-        svg.append(sv("text", { x: xNow + 10, y: cy + 4, class: "k-sub" }, narrow ? "geen streefdatum" : "zet een streefdatum bij Bewerken"));
+        // Geen streefdatum: een stippellijn tot de laatste mijlpaal, of (zonder gedateerde mijlpalen) een korte melding.
+        var lastMs = 0;
+        r.ms.forEach(function (x) { if (x.d) lastMs = Math.max(lastMs, x.d.getTime()); });
+        if (lastMs) svg.append(sv("line", { x1: xNow, x2: X(lastMs), y1: cy, y2: cy, class: "k-track open" }));
+        else if (narrow) svg.append(sv("text", { x: xNow + 10, y: cy + 4, class: "k-sub" }, "geen streefdatum"));
       }
       r.ms.forEach(function (x) {
         if (!x.d) return;
@@ -1071,7 +1093,9 @@
         var xd2 = X(r.dl.getTime()), lab = monthYear(r.dl), right = xd2 + 12 + lab.length * 6.8 <= W;
         svg.append(sv("circle", { cx: xd2, cy: cy, r: 8, class: "k-ring" }));
         svg.append(sv("circle", { cx: xd2, cy: cy, r: 6, class: "k-dl" + (cd && cd.over ? " over" : "") }));
-        svg.append(sv("text", { x: right ? xd2 + 12 : xd2 - 12, y: cy + 4, class: "k-dlt", "text-anchor": right ? "start" : "end" }, lab));
+        // Past de datum niet rechts van de stip, dan erboven in plaats van over de lijn heen.
+        svg.append(right ? sv("text", { x: xd2 + 12, y: cy + 4, class: "k-dlt" }, lab)
+          : sv("text", { x: Math.min(W, xd2 + 8), y: cy - 12, class: "k-dlt", "text-anchor": "end" }, lab));
         var hitD = sv("circle", { cx: xd2, cy: cy, r: 13, class: "k-hit", tabindex: "0", role: "img", "aria-label": "Streefdatum " + (r.g.titel || "") + ": " + longDate(r.dl) + ", " + cd.text });
         bindTip(hitD, function () { return koersTip(r, "dl"); });
         svg.append(hitD);
@@ -1983,8 +2007,9 @@
     return "Laatste weken: " + (vals.length ? vals.join(", ") + "; " : "") + "deze week " + last;
   }
   // Kleine kolommengrafiek per actie: elke staaf is een week, het streepje je plan voor die week.
-  function sparkSvg(ser, unit, label) {
-    var n = ser.length, bw = 7, gap = 3, H = 28, top = 3, W = n * (bw + gap) - gap;
+  function sparkSvg(ser, unit, label, size) {
+    size = size || {};
+    var n = ser.length, bw = size.bw || 7, gap = 3, H = size.H || 28, top = 3, W = n * (bw + gap) - gap;
     var max = 0;
     ser.forEach(function (p) { if (p.v != null) max = Math.max(max, p.v); if (!unit && p.target) max = Math.max(max, p.target); });
     if (max <= 0) max = 1;
@@ -2223,7 +2248,7 @@
     if (v === "overzicht") renderOverview();
     if (v === "jaar") renderYear();
     if (v === "investeren") renderHistChart();
-    if (v === "doelen") { renderKoers(); drawObCharts(); }
+    if (v === "doelen") renderKoers();
     if (changed) window.scrollTo(0, 0);
   }
 
@@ -2293,7 +2318,7 @@
     window.addEventListener("hashchange", route);
     var rt;
     window.addEventListener("resize", function () {
-      clearTimeout(rt); rt = setTimeout(function () { if (S.view === "jaar") renderYearChart(yearSeries()); if (S.view === "investeren") renderHistChart(); if (S.view === "doelen") { renderKoers(); drawObCharts(); } }, 150);
+      clearTimeout(rt); rt = setTimeout(function () { if (S.view === "jaar") renderYearChart(yearSeries()); if (S.view === "investeren") renderHistChart(); if (S.view === "doelen") renderKoers(); }, 150);
     });
     window.addEventListener("scroll", hideTip, { passive: true });
   }

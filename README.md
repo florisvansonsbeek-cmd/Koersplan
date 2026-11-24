@@ -3,7 +3,7 @@
 Persoonlijk dashboard om te zien of je op koers ligt met je toekomst:
 
 - **Overzicht**: je weekscore (hoeveel van je geplande acties je hebt afgevinkt, gemiddeld over je doelen) en afvinken per doel. Bij elk doel zie je in één oogopslag waarom je het doet, waar het naartoe gaat en hoe lang je nog hebt, de volgende mijlpaal, en per actie een minigrafiek van je laatste weken met of je opbouwt. Deed je meer dan gepland, dan tik je op **+** voor een extra keer. Rechts staat wat eraan komt (mijlpalen en streefdata) en je handelsplan in het kort.
-- **Doelen**: je koers als tijdlijn van nu tot je verste streefdatum, je doelen met waarom, resultaat, streefdatum en mijlpalen (met datum), per actie een opbouwgrafiek, een logboek en sparren met Claude.
+- **Doelen**: je koers als tijdlijn van nu tot je verste streefdatum, en je doelen als rustige lijst: per doel de streefdatum, de volgende mijlpaal en je uitvoering over de laatste 4 weken. Open een doel voor je waarom, het resultaat, je wekelijkse acties met hun opbouw en je mijlpalen. Daarnaast een logboek en sparren met Claude.
 - **Beleggen**: je handelsplan uit [Handelsplan](#koppeling-met-handelsplan) (regime, wat je per positie doet en bij welke niveaus, signalen, komende momenten, scenario's, spelregels en marktcijfers), plus je eigen portfolio, inleg per maand en een marktlogboek. Geen koop- of verkoopadvies.
 - **Jaar**: jaaragenda met een score per week, het verloop, en per doel je uitvoering en opbouw.
 
