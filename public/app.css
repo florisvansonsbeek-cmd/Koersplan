@@ -308,6 +308,9 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-3); 
   .oa-ctl { justify-items: start; }
   .og-res { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
 }
+.past-note { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px;
+  margin-bottom: 12px; padding: 11px 14px; border-radius: var(--r); background: var(--warn-soft); font-size: 14.5px; line-height: 1.45; }
+.past-note p { min-width: 0; }
 .boxes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .box {
   width: 36px; height: 36px; border: 1.5px solid var(--line); background: var(--surface-2); border-radius: 8px;

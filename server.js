@@ -707,6 +707,8 @@ async function api(req, res, url) {
 
   if (parts[1] === "config" && method === "GET") {
     return sendJson(req, res, 200, {
+      // Servertijd: de pagina rekent daarmee, zodat een verkeerde klok op je apparaat je niet in een andere week zet.
+      nu: Date.now(),
       spar: !!ANTHROPIC_API_KEY, model: ANTHROPIC_MODEL, db: dbReady,
       handelsplan: { url: HANDELSPLAN_URL, gekoppeld: !!(HANDELSPLAN_URL && HANDELSPLAN_PASSWORD), minuten: HP_SYNC_MINUTES },
     });

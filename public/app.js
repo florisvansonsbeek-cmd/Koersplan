@@ -67,7 +67,7 @@
   function longDate(d) { return d ? d.getDate() + " " + MONTHS_LONG[d.getMonth()] + " " + d.getFullYear() : ""; }
   function rangeLabel(mon) {
     var sun = addDays(mon, 6);
-    var yr = sun.getFullYear() !== new Date().getFullYear() ? " " + sun.getFullYear() : "";
+    var yr = sun.getFullYear() !== clockNow().getFullYear() ? " " + sun.getFullYear() : "";
     return shortDate(mon) + " – " + shortDate(sun) + yr;
   }
   function dateOnly(iso) { var d = new Date(iso); return isNaN(d.getTime()) ? "" : d.getDate() + " " + MONTHS[d.getMonth()] + " " + d.getFullYear(); }
@@ -78,12 +78,16 @@
   function avgOf(a) { return a.length ? a.reduce(function (s, v) { return s + v; }, 0) / a.length : null; }
 
   /* ---------- Tijd tot een datum en korte teksten ---------- */
+  // De tijd van de server is leidend: loopt de klok van dit apparaat ernaast, dan klopt je week toch.
+  // clockOffset = servertijd min apparaattijd, gezet zodra /api/config binnen is (kleine afwijkingen negeren we).
+  var clockOffset = 0;
+  function clockNow() { return new Date(Date.now() + clockOffset); }
   function dayNum(d) { return Math.round(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 864e5); }
-  function today0() { var n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); }
+  function today0() { var n = clockNow(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); }
   function monthYear(d) { return MONTHS[d.getMonth()] + " " + d.getFullYear(); }
-  function dateShortY(d) { return shortDate(d) + (d.getFullYear() !== new Date().getFullYear() ? " " + d.getFullYear() : ""); }
+  function dateShortY(d) { return shortDate(d) + (d.getFullYear() !== clockNow().getFullYear() ? " " + d.getFullYear() : ""); }
   function countdown(d) {
-    var n = dayNum(d) - dayNum(new Date()), a = Math.abs(n), t;
+    var n = dayNum(d) - dayNum(clockNow()), a = Math.abs(n), t;
     if (n === 0) return { text: "vandaag", n: 0, over: false };
     if (a >= 61) t = Math.round(a / 30.44) + " mnd";
     else if (a >= 14) t = Math.round(a / 7) + " wk";
@@ -221,11 +225,11 @@
   }
 
   /* ================= Jaar en weken ================= */
-  function thisMonday() { return mondayOf(new Date()); }
+  function thisMonday() { return mondayOf(clockNow()); }
   function yearStart() { var s = parseYmd(S.settings.startMaandag); return s ? mondayOf(s) : thisMonday(); }
   function yearWeeks() { var st = yearStart(), out = []; for (var i = 0; i < 52; i++) out.push(addDays(st, 7 * i)); return out; }
   function weekState(mon) { var c = thisMonday().getTime(), t = mon.getTime(); return t === c ? "current" : t < c ? "past" : "future"; }
-  function paceNow() { var n = new Date(), di = (n.getDay() + 6) % 7; return (di + (n.getHours() + n.getMinutes() / 60) / 24) / 7; }
+  function paceNow() { var n = clockNow(), di = (n.getDay() + 6) % 7; return (di + (n.getHours() + n.getMinutes() / 60) / 24) / 7; }
 
   function goalsSorted() {
     return Object.keys(S.goals).map(function (id) { return Object.assign({ id: id }, S.goals[id]); })
@@ -439,11 +443,16 @@
       .sort(function (a, b) { if (a.d && b.d) return a.d - b.d; if (a.d) return -1; if (b.d) return 1; return a.i - b.i; });
   }
   function greeting() {
-    var hr = new Date().getHours();
+    var hr = clockNow().getHours();
     var g = hr < 6 ? "Goedenacht" : hr < 12 ? "Goedemorgen" : hr < 18 ? "Goedemiddag" : "Goedenavond";
     var naam = String(S.settings.naam || "").trim();
-    var d = new Date();
-    return g + (naam ? ", " + naam : "") + ". Het is " + DAYS[d.getDay()] + " " + d.getDate() + " " + MONTHS_LONG[d.getMonth()] + ".";
+    var d = clockNow();
+    var out = g + (naam ? ", " + naam : "") + ". Het is " + DAYS[d.getDay()] + " " + d.getDate() + " " + MONTHS_LONG[d.getMonth()] + ".";
+    if (Math.abs(clockOffset) >= 36e5) {
+      var days = Math.round(Math.abs(clockOffset) / 864e5);
+      out += " De klok van dit apparaat loopt " + (days >= 1 ? days + (days === 1 ? " dag" : " dagen") : "meer dan een uur") + (clockOffset > 0 ? " achter" : " voor") + "; Koersplan rekent met de echte datum.";
+    }
+    return out;
   }
 
   /* ================= Render: kop ================= */
@@ -484,6 +493,15 @@
     $("#ov-next").disabled = st !== "past";
     $("#ov-today").hidden = st === "current";
     $(".hero-cap").textContent = st === "current" ? "Effectiviteit deze week" : st === "past" ? "Effectiviteit die week" : "Effectiviteit";
+    // Een oude week open? Dan staat dat vlak boven de vakjes, zodat je niet per ongeluk in de verkeerde week afvinkt.
+    var pastNote = $("#ov-past");
+    if (st === "past") {
+      var cur = isoWeek(thisMonday()).week;
+      pastNote.replaceChildren(
+        h("p", null, "Je vinkt af voor ", h("strong", { text: "week " + isoWeek(mon).week }), " (" + rangeLabel(mon) + "). Het is nu week " + cur + "."),
+        h("button", { type: "button", class: "btn primary sm", text: "Naar week " + cur, onclick: function () { S.selMon = null; renderOverview(); } }));
+      pastNote.hidden = false;
+    } else pastNote.hidden = true;
 
     var items = itemsFor(mon), r = scoreItems(items), score = r.score;
     var chipBox = $("#ov-chip"); chipBox.replaceChildren();
@@ -664,7 +682,7 @@
     var b = clone(g), hit = false;
     (b.acties || []).forEach(function (a) { if (a.id === aid) { a.perWeek = clamp(Math.round(to), 1, 14); hit = true; } });
     if (!hit) return;
-    b.concept = false; b.bijgewerkt = new Date().toISOString();
+    b.concept = false; b.bijgewerkt = clockNow().toISOString();
     S.goals[gid] = b; queueWrite("doelen/" + gid, b, 0);
     renderAll();
     toast("Lat staat op " + to + "× per week. Deze week telt dat als 100%.");
@@ -701,7 +719,7 @@
   }
   function saveWeekItems(mon, items, delay) {
     var key = weekKey(mon), prev = S.weeks[key] || {};
-    var doc = { maandag: ymd(mon), items: items, reflectie: prev.reflectie || "", bijgewerkt: new Date().toISOString() };
+    var doc = { maandag: ymd(mon), items: items, reflectie: prev.reflectie || "", bijgewerkt: clockNow().toISOString() };
     S.weeks[key] = doc;
     queueWrite("weken/" + key, doc, delay);
   }
@@ -709,7 +727,7 @@
   function saveReflection(mon, val) {
     if (!canWrite()) return;
     var key = weekKey(mon);
-    var doc = { maandag: ymd(mon), items: clone(itemsFor(mon)), reflectie: String(val).slice(0, 4000), bijgewerkt: new Date().toISOString() };
+    var doc = { maandag: ymd(mon), items: clone(itemsFor(mon)), reflectie: String(val).slice(0, 4000), bijgewerkt: clockNow().toISOString() };
     S.weeks[key] = doc;
     queueWrite("weken/" + key, doc, 0);
     $("#ov-reflect-state").textContent = "Opgeslagen";
@@ -954,7 +972,7 @@
       }),
       volgorde: old.volgorde != null ? old.volgorde : nextOrder(),
       concept: false,
-      bijgewerkt: new Date().toISOString()
+      bijgewerkt: clockNow().toISOString()
     };
     S.goals[d.id] = body;
     queueWrite("doelen/" + d.id, body, 0);
@@ -977,7 +995,7 @@
     (b.mijlpalen || []).forEach(function (m) {
       if (m.id !== mid) return;
       m.klaar = !!val;
-      if (val) m.klaarOp = ymd(new Date()); else delete m.klaarOp;
+      if (val) m.klaarOp = ymd(clockNow()); else delete m.klaarOp;
     });
     S.goals[gid] = b;
     queueWrite("doelen/" + gid, b, 200);
@@ -1116,7 +1134,7 @@
   }
   // Overzicht: wat eraan komt (mijlpalen met een datum en streefdata), zodat je weekwerk een richting heeft.
   function upcomingKoers(n) {
-    var out = [], t = dayNum(new Date());
+    var out = [], t = dayNum(clockNow());
     goalsSorted().forEach(function (g) {
       openMilestones(g).forEach(function (x) { if (x.d) out.push({ d: x.d, text: x.m.tekst, g: g, kind: "ms" }); });
       var dl = parseYmd(g.deadline);
@@ -1137,7 +1155,7 @@
     box.append(h("ul", { class: "cal-list" }, list.map(function (x) {
       var cd = countdown(x.d);
       return h("li", { class: "cal" + (cd.over ? " over" : "") },
-        h("div", { class: "cal-date", "aria-hidden": "true" }, h("span", { class: "cal-day", text: String(x.d.getDate()) }), h("span", { class: "cal-mon", text: MONTHS[x.d.getMonth()] + (x.d.getFullYear() !== new Date().getFullYear() ? " '" + String(x.d.getFullYear()).slice(2) : "") })),
+        h("div", { class: "cal-date", "aria-hidden": "true" }, h("span", { class: "cal-day", text: String(x.d.getDate()) }), h("span", { class: "cal-mon", text: MONTHS[x.d.getMonth()] + (x.d.getFullYear() !== clockNow().getFullYear() ? " '" + String(x.d.getFullYear()).slice(2) : "") })),
         h("div", { class: "cal-body" },
           h("div", { class: "cal-top" }, h("span", { class: "cal-kind", text: x.kind === "dl" ? "Streefdatum" : "Mijlpaal" }), h("span", { class: "cal-cd" + (cd.over ? " over" : ""), text: cd.text })),
           h("strong", { class: "cal-what", text: x.text }),
@@ -1169,7 +1187,7 @@
   async function addNote(text, soort, doel) {
     if (!canWrite()) { toast("Opslaan kan alleen als eigenaar."); return; }
     text = String(text || "").trim(); if (!text) return;
-    var id = rid("n"), body = { tekst: text.slice(0, 4000), soort: soort || "notitie", doel: doel || null, datum: new Date().toISOString() };
+    var id = rid("n"), body = { tekst: text.slice(0, 4000), soort: soort || "notitie", doel: doel || null, datum: clockNow().toISOString() };
     S.notes.unshift(Object.assign({ id: id }, body));
     renderNotes(); renderMarketLog();
     try { await S.db.doc("notities/" + id).set(body); } catch (e) { writeError(e); }
@@ -1219,7 +1237,7 @@
     ].join("\n");
   }
   function buildContext() {
-    var now = new Date(), curMon = thisMonday(), ws = yearWeeks();
+    var now = clockNow(), curMon = thisMonday(), ws = yearWeeks();
     var L = [sparRules(), "", "=== GEGEVENS UIT HET DASHBOARD ==="];
     L.push("Vandaag: " + DAYS[now.getDay()] + " " + now.getDate() + " " + MONTHS_LONG[now.getMonth()] + " " + now.getFullYear() + ", week " + isoWeek(curMon).week + ".");
     L.push("Het dashboardjaar loopt van " + longDate(ws[0]) + " tot en met " + longDate(addDays(ws[51], 6)) + ". Score per week = gemiddeld percentage afgevinkte acties over de doelen; 60% of meer telt als op koers.");
@@ -1381,11 +1399,11 @@
           if (p.eenheid != null) { if (p.eenheid) b.acties[i].eenheid = p.eenheid; else delete b.acties[i].eenheid; }
         }
       } else b.acties.push(Object.assign({ id: rid("a"), tekst: p.tekst, perWeek: p.perWeek }, p.eenheid ? { eenheid: p.eenheid } : {}));
-      b.concept = false; b.bijgewerkt = new Date().toISOString();
+      b.concept = false; b.bijgewerkt = clockNow().toISOString();
       S.goals[p.doel] = b; queueWrite("doelen/" + p.doel, b, 0);
     } else if (p.type === "nieuw") {
       id = rid("d");
-      b = { titel: p.titel, categorie: p.categorie || "", waarom: p.waarom || "", kort: p.kort || "", resultaat: p.resultaat || "", deadline: "", acties: (p.acties || []).map(function (a) { return Object.assign({ id: rid("a"), tekst: a.tekst, perWeek: a.perWeek }, a.eenheid ? { eenheid: a.eenheid } : {}); }), mijlpalen: [], volgorde: nextOrder(), concept: false, bijgewerkt: new Date().toISOString() };
+      b = { titel: p.titel, categorie: p.categorie || "", waarom: p.waarom || "", kort: p.kort || "", resultaat: p.resultaat || "", deadline: "", acties: (p.acties || []).map(function (a) { return Object.assign({ id: rid("a"), tekst: a.tekst, perWeek: a.perWeek }, a.eenheid ? { eenheid: a.eenheid } : {}); }), mijlpalen: [], volgorde: nextOrder(), concept: false, bijgewerkt: clockNow().toISOString() };
       S.goals[id] = b; queueWrite("doelen/" + id, b, 0);
     } else if (p.type === "notitie") {
       addNote(p.tekst, "inzicht", p.doel && S.goals[p.doel] ? p.doel : null);
@@ -1574,7 +1592,7 @@
   function savePortfolio() {
     var d = (S.pfDraft || []).filter(function (p) { return String(p.naam || "").trim(); });
     var posities = d.map(function (p) { return { id: p.id, naam: String(p.naam).trim().slice(0, 60), ticker: String(p.ticker || "").trim().slice(0, 12), soort: p.soort || "", waarde: toNum(p.waarde), inleg: toNum(p.inleg) }; });
-    var today = ymd(new Date());
+    var today = ymd(clockNow());
     var body = { posities: posities, bijgewerkt: today };
     S.invest.portfolio = body; queueWrite("invest/portfolio", body, 0);
     var total = posities.reduce(function (a, p) { return a + (p.waarde || 0); }, 0);
@@ -1603,7 +1621,7 @@
   }
   function renderDca() {
     var box = $("#months"); box.replaceChildren();
-    var inl = (S.invest.inleg || {}).maanden || {}, now = new Date(), nowK = now.getFullYear() + "-" + pad(now.getMonth() + 1);
+    var inl = (S.invest.inleg || {}).maanden || {}, now = clockNow(), nowK = now.getFullYear() + "-" + pad(now.getMonth() + 1);
     var months = yearMonths(), n = 0, w = canWrite();
     months.forEach(function (mk) {
       var on = !!inl[mk.key]; if (on) n++;
@@ -1721,7 +1739,7 @@
     return p ? (p.short || p.name) : id;
   }
   function upcoming(plan, n) {
-    var t = new Date(), today = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+    var t = clockNow(), today = new Date(t.getFullYear(), t.getMonth(), t.getDate());
     return (plan.calendar || []).map(function (c) { return Object.assign({ d: parseYmd(c.date) }, c); })
       .filter(function (c) { return c.d && c.d.getTime() >= today.getTime(); })
       .sort(function (a, b) { return a.d - b.d; }).slice(0, n);
@@ -1849,7 +1867,7 @@
     return card;
   }
   function hpCalendar(plan) {
-    var list = upcoming(plan, 6), t = new Date(), todayKey = ymd(t);
+    var list = upcoming(plan, 6), t = clockNow(), todayKey = ymd(t);
     var card = h("section", { class: "panel hp-cal" }, h("div", { class: "panel-head" }, h("h2", { text: "Komende momenten" })));
     if (!list.length) { card.append(h("p", { class: "hint", text: "Geen momenten gepland." })); return card; }
     card.append(h("ul", { class: "cal-list" }, list.map(function (c) {
@@ -2178,7 +2196,8 @@
         var cell = h("button", { type: "button", class: cls, "aria-label": label, disabled: d.state === "future" },
           h("span", { class: "yw", text: "wk " + wk }), h("span", { class: "yv", text: d.state === "future" ? "" : d.score == null ? "–" : Math.round(d.score) + "%" }));
         if (d.state !== "future") {
-          cell.addEventListener("click", function () { hideTip(); S.selMon = d.mon; location.hash = "#overzicht"; });
+          // Deze week kiezen betekent: geen vaste week, zodat je na het weekend vanzelf in de nieuwe week staat.
+          cell.addEventListener("click", function () { hideTip(); S.selMon = weekState(d.mon) === "current" ? null : d.mon; location.hash = "#overzicht"; });
           cell.addEventListener("pointerenter", function (ev) { showTip(ev.clientX, ev.clientY, weekTipRows(d)); });
           cell.addEventListener("pointermove", function (ev) { showTip(ev.clientX, ev.clientY, weekTipRows(d)); });
           cell.addEventListener("pointerleave", hideTip);
@@ -2419,7 +2438,14 @@
     S.owner = true;
     subscribe();
     try {
+      var t0 = Date.now();
       var cfg = await api("GET", "/api/config");
+      var t1 = Date.now();
+      // Wijkt de klok van dit apparaat meer dan 10 minuten af van de server, dan rekent Koersplan met de servertijd.
+      if (typeof cfg.nu === "number" && isFinite(cfg.nu)) {
+        var off = cfg.nu - (t0 + t1) / 2;
+        clockOffset = Math.abs(off) > 10 * 60e3 ? off : 0;
+      }
       S.sparOn = !!cfg.spar;
       S.toolsOk = S.sparOn;
       S.hpCfg = cfg.handelsplan || {};
@@ -2430,7 +2456,13 @@
     renderAll(true);
     setupSpar();
     setInterval(function () { if (document.visibilityState === "visible") refreshData(); }, 60000);
-    document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") refreshData(); });
+    var hiddenAt = 0;
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState !== "visible") { hiddenAt = Date.now(); return; }
+      // Kom je na een halfuur of langer terug, dan begin je weer bij deze week, ook als je eerder een oude week openzette.
+      if (S.selMon && hiddenAt && Date.now() - hiddenAt > 30 * 60e3) { S.selMon = null; renderOverview(); }
+      refreshData();
+    });
   }
   init();
 })();
