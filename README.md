@@ -26,7 +26,7 @@ De app is één Node-server (`server.js`) met Postgres als opslag. Inloggen gaat
    | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (heet je database-service anders, gebruik dan die naam) |
    | `APP_PASSWORD` | je eigen wachtwoord, liefst 12 tekens of meer |
    | `HANDELSPLAN_URL` | optioneel: het adres van je Handelsplan-site, bijvoorbeeld `https://handelsplan.vsonsbeek.nl` |
-   | `HANDELSPLAN_PASSWORD` | optioneel: het wachtwoord waarmee je bij Handelsplan inlogt |
+   | `HANDELSPLAN_PASSWORD` | optioneel: het wachtwoord of de pincode waarmee je bij Handelsplan inlogt |
    | `ANTHROPIC_API_KEY` | optioneel, zie *Sparren met Claude* |
 4. Ga naar **Settings → Networking → Generate Domain**. Open die link en log in.
 5. Optioneel: zet bij **Settings → Deploy** het healthcheck-pad op `/healthz`.
@@ -43,10 +43,17 @@ Bestaat `APP_PASSWORD` uit 4 tot 8 cijfers, dan toont de inlogpagina een pincode
 
 Koersplan leest je plan uit Handelsplan; het schrijft er niets in terug.
 
-- Met `HANDELSPLAN_URL` en `HANDELSPLAN_PASSWORD` logt de server in bij Handelsplan (`POST /api/token`) en haalt hij `plan/current` en `market/latest` op (`GET /api/doc`). De inlogsleutel blijft in het geheugen van de server; hij wordt nergens opgeslagen.
+- Met `HANDELSPLAN_URL` en `HANDELSPLAN_PASSWORD` logt de server in bij Handelsplan (`POST /api/token`) en haalt hij `plan/current` en `market/latest` op (`GET /api/doc`). Gebruikt Handelsplan een pincode, dan zet je die pincode in `HANDELSPLAN_PASSWORD`. De inlogsleutel blijft in het geheugen van de server; hij wordt nergens opgeslagen.
 - Dat gebeurt bij het starten, elke 30 minuten (instelbaar met `HANDELSPLAN_SYNC_MINUTES`, minimaal 5) en als je bij **Beleggen** op **Nu bijwerken** klikt.
 - Een kopie komt in de tabel `handelsplan`. Die is in Koersplan alleen-lezen. Lukt het ophalen even niet, dan zie je de laatst opgehaalde versie met een melding erbij.
-- Je plan aanpassen doe je in Handelsplan zelf. Verander je daar je wachtwoord, pas dan ook `HANDELSPLAN_PASSWORD` aan.
+- Je plan aanpassen doe je in Handelsplan zelf. Verander je daar je wachtwoord of pincode, pas dan ook `HANDELSPLAN_PASSWORD` aan.
+
+Zo voorkomt Koersplan dat Handelsplan hem buitensluit:
+
+- **Klopt het wachtwoord niet, dan stopt het automatisch ophalen.** Handelsplan sluit een netwerk na 4 foute pogingen 24 uur af, dus Koersplan blijft het niet elk halfuur proberen. Pas `HANDELSPLAN_PASSWORD` aan; Railway start de app dan opnieuw en hij probeert het meteen. **Nu bijwerken** probeert het ook.
+- **Koersplan logt in als bekend apparaat.** Na de eerste geslaagde inlog geeft Handelsplan een apparaatbewijs. Koersplan bewaart dat in `app_meta` en stuurt het voortaan mee. Een bekend apparaat heeft bij Handelsplan een eigen grens, dus foute pogingen van anderen (bijvoorbeeld bots) sluiten Koersplan niet buiten.
+- **Bij een blokkade zie je tot wanneer.** Koersplan neemt de eindtijd over die Handelsplan noemt.
+- **Alleen production haalt op.** In een kopie van je Railway-omgeving (andere `RAILWAY_ENVIRONMENT_NAME` dan `production`) logt Koersplan niet in bij Handelsplan, want die kopie heeft hetzelfde wachtwoord en zou anders extra pogingen doen.
 
 ## Doelen in één keer vervangen
 
@@ -62,7 +69,7 @@ Zet bij Variables `DOELEN_IMPORT` op JSON in de vorm `{"doelen": {"id": {titel, 
 | `invest` | portfolio, waardeverloop, inleg per maand en je maximum per positie |
 | `instellingen` | je naam en de startweek van je jaar |
 | `handelsplan` | kopie van je plan en de marktcijfers uit Handelsplan, plus de status van het laatste ophalen |
-| `app_meta` | intern: sessiesleutel en of de startdata geladen is |
+| `app_meta` | intern: sessiesleutel, of de startdata geladen is, back-ups van geïmporteerde doelen en het apparaatbewijs van Handelsplan |
 
 Elke tabel heeft de kolommen `id`, `data` (jsonb) en `bijgewerkt`. Je kunt ze bekijken in Railway via de Postgres-service, tab **Data**. Een back-up van alles download je in de app via **Jaar → Back-up downloaden**.
 
