@@ -11,8 +11,14 @@
  *   SESSION_SECRET     optioneel: anders maakt de app zelf een geheim aan in de database
  *   PGSSL              optioneel: "true" als je database SSL vereist
  *   HANDELSPLAN_URL    optioneel: adres van je Handelsplan-site, bijv. https://handelsplan.vsonsbeek.nl
- *   HANDELSPLAN_PASSWORD  optioneel: je Handelsplan-wachtwoord; samen met de URL zet dit de koppeling aan
+ *   HANDELSPLAN_PASSWORD  optioneel: je Handelsplan-wachtwoord of -pincode; samen met de URL zet dit de koppeling aan
  *   HANDELSPLAN_SYNC_MINUTES  optioneel: hoe vaak het plan wordt opgehaald, standaard 30 (minimaal 5)
+ *   DOELEN_IMPORT      optioneel: JSON met doelen die één keer alle doelen vervangen (zie README)
+ *   VISIE_IMPORT       optioneel: JSON met je visie die één keer instellingen/visie zet (zie README)
+ *
+ * Railway zet zelf RAILWAY_ENVIRONMENT_NAME. Alleen in de omgeving "production" (of lokaal, zonder die variabele)
+ * logt Koersplan in bij Handelsplan; een kopie van de omgeving heeft hetzelfde wachtwoord en zou anders extra
+ * inlogpogingen doen die bij Handelsplan meetellen voor een blokkade.
  */
 
 const http = require("node:http");
@@ -36,6 +42,8 @@ const READ_ONLY = new Set(["handelsplan"]);
 const HANDELSPLAN_URL = (process.env.HANDELSPLAN_URL || "").replace(/\/+$/, "");
 const HANDELSPLAN_PASSWORD = process.env.HANDELSPLAN_PASSWORD || "";
 const HP_SYNC_MINUTES = Math.max(5, Number(process.env.HANDELSPLAN_SYNC_MINUTES) || 30);
+const RAILWAY_ENV = process.env.RAILWAY_ENVIRONMENT_NAME || "";
+const HP_ENV_OK = !RAILWAY_ENV || RAILWAY_ENV === "production";
 const ID_RE = /^[A-Za-z0-9_\-.~:@+]{1,200}$/;
 const COOKIE = "koersplan_sessie";
 const SESSION_DAYS = 30;
@@ -122,6 +130,44 @@ async function importDoelenIfNeeded() {
   }
 }
 
+/* Eenmalige import van je toekomst via de variabele VISIE_IMPORT (JSON: {"visie": {...}}). Vervangt instellingen/visie;
+   de vorige versie komt als back-up in app_meta. Elke inhoud wordt maar één keer toegepast, dus wat je daarna in de
+   app aanpast (tussendoelen afvinken, teksten bewerken) blijft staan. */
+async function importVisieIfNeeded() {
+  const raw = process.env.VISIE_IMPORT;
+  if (!raw) return;
+  let visie;
+  try { const j = JSON.parse(raw); visie = j && j.visie ? j.visie : j; } catch (e) { log("VISIE_IMPORT is geen geldige JSON:", e.message); return; }
+  const heeft = (k) => typeof visie[k] === "string" && visie[k].trim() !== "";
+  if (!visie || typeof visie !== "object" || Array.isArray(visie) || !(heeft("rol") || heeft("zin"))) {
+    log("VISIE_IMPORT mist een visie met een zin of een rol"); return;
+  }
+  const key = "visie_import_" + crypto.createHash("sha256").update(raw).digest("hex").slice(0, 16);
+  const done = await pool.query("SELECT 1 FROM app_meta WHERE sleutel = $1", [key]);
+  if (done.rowCount) return;
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    const old = await c.query("SELECT data FROM instellingen WHERE id = 'visie'");
+    if (old.rowCount) {
+      await c.query("INSERT INTO app_meta (sleutel, waarde) VALUES ($1, $2) ON CONFLICT (sleutel) DO NOTHING",
+        ["visie_backup_" + new Date().toISOString(), JSON.stringify(old.rows[0].data)]);
+    }
+    const data = Object.assign({}, visie, { bijgewerkt: new Date().toISOString() });
+    await c.query(
+      `INSERT INTO instellingen (id, data, bijgewerkt) VALUES ('visie', $1::jsonb, now())
+       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, bijgewerkt = now()`, [JSON.stringify(data)]);
+    await c.query("INSERT INTO app_meta (sleutel, waarde) VALUES ($1, $2)", [key, new Date().toISOString()]);
+    await c.query("COMMIT");
+    log("Visie geïmporteerd" + (old.rowCount ? " (vorige versie bewaard als back-up)" : ""));
+  } catch (e) {
+    await c.query("ROLLBACK").catch(() => {});
+    log("Visie importeren mislukt:", e.message);
+  } finally {
+    c.release();
+  }
+}
+
 async function seedIfNeeded() {
   const done = await pool.query("SELECT 1 FROM app_meta WHERE sleutel = 'startdata_geladen'");
   if (done.rowCount) return;
@@ -172,6 +218,8 @@ function initDb() {
         await loadSessionKey();
         await seedIfNeeded();
         await importDoelenIfNeeded();
+        await importVisieIfNeeded();
+        await hpLoadDevice();
         dbReady = true;
         dbError = "";
         log("Database klaar");
@@ -333,6 +381,15 @@ function serveFile(req, res, file, type, cache) {
 let hpToken = null;
 let hpSyncing = null;
 let hpLastManual = 0;
+let hpLoginBusy = null;
+// Na een fout wachtwoord haalt Koersplan niet meer vanzelf op: elke poging telt bij Handelsplan mee, en na 4 foute
+// pogingen per dag sluit Handelsplan hem 24 uur buiten. Wijzig je HANDELSPLAN_PASSWORD, dan start Railway de app
+// opnieuw en probeert hij het meteen. Op "Nu bijwerken" klikken probeert het ook.
+let hpWrongPassword = false;
+let hpWrongPasswordHint = "";
+// Apparaatbewijs van Handelsplan: daarmee telt Koersplan daar als bekend apparaat, met een eigen grens, los van
+// foute pogingen van anderen vanaf hetzelfde netwerk. Staat in app_meta, zodat het een herstart overleeft.
+let hpDevice = null;
 
 async function upsertDoc(coll, id, data) {
   await pool.query(
@@ -348,71 +405,115 @@ async function readDoc(coll, id) {
 async function hpRequest(pathname, init) {
   return fetch(HANDELSPLAN_URL + pathname, Object.assign({ signal: AbortSignal.timeout(20000) }, init));
 }
+async function hpLoadDevice() {
+  const r = await pool.query("SELECT waarde FROM app_meta WHERE sleutel = 'handelsplan_apparaat'");
+  hpDevice = r.rows[0] ? r.rows[0].waarde : null;
+}
 async function hpLogin() {
+  const body = { password: HANDELSPLAN_PASSWORD };
+  if (hpDevice) body.device = hpDevice;
   const r = await hpRequest("/api/token", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ password: HANDELSPLAN_PASSWORD }),
+    body: JSON.stringify(body),
   });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok || !j.token) throw Object.assign(new Error(j.error || `Inloggen bij Handelsplan mislukt (HTTP ${r.status})`), { status: r.status });
+  if (!r.ok || !j.token) {
+    if (r.status === 401) hpWrongPassword = true;
+    throw Object.assign(new Error(j.error || `Inloggen bij Handelsplan mislukt (HTTP ${r.status})`), { status: r.status, login: true, hp: String(j.error || "") });
+  }
   hpToken = j.token;
+  hpWrongPassword = false;
+  if (typeof j.device === "string" && j.device && j.device !== hpDevice) {
+    hpDevice = j.device;
+    await pool.query(
+      `INSERT INTO app_meta (sleutel, waarde) VALUES ('handelsplan_apparaat', $1)
+       ON CONFLICT (sleutel) DO UPDATE SET waarde = EXCLUDED.waarde`, [j.device]
+    ).catch((e) => log("Apparaatbewijs van Handelsplan niet bewaard:", e.message));
+  }
+}
+// Eén inlogpoging tegelijk, ook als twee verzoeken tegelijk merken dat de inlogsleutel verlopen is.
+function hpEnsureLogin() {
+  if (hpToken) return Promise.resolve();
+  if (!hpLoginBusy) hpLoginBusy = hpLogin().finally(() => { hpLoginBusy = null; });
+  return hpLoginBusy;
 }
 async function hpGetDoc(docPath) {
   for (let attempt = 0; attempt < 2; attempt++) {
-    if (!hpToken) await hpLogin();
-    const r = await hpRequest("/api/doc?path=" + encodeURIComponent(docPath), { headers: { authorization: "Bearer " + hpToken } });
-    if (r.status === 401) { hpToken = null; continue; }
+    await hpEnsureLogin();
+    const used = hpToken;
+    const r = await hpRequest("/api/doc?path=" + encodeURIComponent(docPath), { headers: { authorization: "Bearer " + used } });
+    if (r.status === 401) { if (hpToken === used) hpToken = null; continue; }
     const j = await r.json().catch(() => null);
     if (!r.ok || !j) throw Object.assign(new Error(`Handelsplan antwoordde met HTTP ${r.status}`), { status: r.status });
     return j.exists ? j.data : null;
   }
-  throw Object.assign(new Error("Inloggen bij Handelsplan lukt niet"), { status: 401 });
+  throw new Error("Handelsplan accepteert de inlogsleutel van Koersplan niet. Koersplan probeert het later opnieuw.");
 }
 function hpErrorText(e) {
-  if (e.status === 401) return "Het wachtwoord van Handelsplan klopt niet. Controleer HANDELSPLAN_PASSWORD in Railway.";
-  if (e.status === 429) return "Handelsplan blokkeert even na te veel inlogpogingen. Over een kwartier gaat het vanzelf weer.";
+  if (e.status === 401 && e.login) {
+    return /pincode/i.test(e.hp || "")
+      ? "De pincode voor Handelsplan klopt niet. Zet HANDELSPLAN_PASSWORD in Railway op je huidige Handelsplan-pincode. Tot dan probeert Koersplan het niet meer vanzelf, zodat Handelsplan hem niet blokkeert."
+      : "Het wachtwoord voor Handelsplan klopt niet. Zet HANDELSPLAN_PASSWORD in Railway op je huidige Handelsplan-wachtwoord. Tot dan probeert Koersplan het niet meer vanzelf, zodat Handelsplan hem niet blokkeert.";
+  }
+  if (e.status === 429) {
+    // Handelsplan noemt zelf hoe lang de blokkade duurt, bijv. "... vanaf dit netwerk, tot 25-11 12:07."
+    const until = /\btot (\d{1,2}-\d{1,2} \d{1,2}:\d{2})/.exec(e.hp || "");
+    if (until) return `Handelsplan laat Koersplan tot ${until[1]} niet inloggen, na te veel foute pogingen. Daarna probeert Koersplan het vanzelf opnieuw.`;
+    if (/15 minuten/.test(e.hp || "")) return "Handelsplan laat Koersplan een kwartier niet inloggen, na te veel pogingen achter elkaar. Daarna probeert Koersplan het vanzelf opnieuw.";
+    return "Handelsplan laat Koersplan even niet inloggen, na te veel foute pogingen. Koersplan probeert het later vanzelf opnieuw.";
+  }
   if (e.status === 503) return "Handelsplan is tijdelijk niet beschikbaar. Koersplan probeert het later vanzelf opnieuw.";
   if (e.name === "TimeoutError" || e.name === "AbortError") return "Handelsplan reageert niet op tijd.";
   if (e.cause && e.cause.code) return `Handelsplan is niet bereikbaar (${e.cause.code}). Klopt HANDELSPLAN_URL?`;
   return e.message || "Onbekende fout bij het ophalen.";
 }
+async function hpSyncOnce(reason) {
+  const started = new Date().toISOString();
+  if (!HANDELSPLAN_URL || !HANDELSPLAN_PASSWORD) {
+    const prev = (await readDoc("handelsplan", "status").catch(() => null)) || {};
+    await upsertDoc("handelsplan", "status", Object.assign({}, prev, {
+      gekoppeld: false, ok: false, urlIngesteld: !!HANDELSPLAN_URL, wachtwoordIngesteld: !!HANDELSPLAN_PASSWORD, laatstePoging: started,
+      fout: !HANDELSPLAN_URL ? "HANDELSPLAN_URL ontbreekt" : "HANDELSPLAN_PASSWORD ontbreekt",
+    })).catch(() => {});
+    return { ok: false, fout: "Niet gekoppeld" };
+  }
+  if (!HP_ENV_OK) {
+    const msg = `Deze kopie (omgeving "${RAILWAY_ENV}") haalt niets op uit Handelsplan; dat doet alleen production.`;
+    const prev = (await readDoc("handelsplan", "status").catch(() => null)) || {};
+    await upsertDoc("handelsplan", "status", Object.assign({}, prev, { ok: false, fout: msg })).catch(() => {});
+    return { ok: false, fout: msg };
+  }
+  if (hpWrongPassword && reason !== "handmatig") {
+    // Geen nieuwe poging met een wachtwoord waarvan we al weten dat het niet klopt; de melding staat er al.
+    return { ok: false, fout: hpErrorText({ status: 401, login: true, hp: hpWrongPasswordHint }) };
+  }
+  try {
+    // Eerst één keer inloggen, zodat de twee verzoeken hieronder niet allebei een inlogsleutel aanvragen.
+    await hpEnsureLogin();
+    const [plan, markt] = await Promise.all([hpGetDoc("plan/current"), hpGetDoc("market/latest")]);
+    if (!plan) throw new Error("Er staat nog geen plan in Handelsplan.");
+    await upsertDoc("handelsplan", "plan", plan);
+    if (markt) await upsertDoc("handelsplan", "markt", markt);
+    await upsertDoc("handelsplan", "status", {
+      gekoppeld: true, ok: true, opgehaald: started, laatstePoging: started, bron: HANDELSPLAN_URL,
+      versie: plan.meta && plan.meta.version != null ? plan.meta.version : null, fout: "",
+    });
+    log(`Handelsplan bijgewerkt (${reason}, versie ${plan.meta && plan.meta.version})`);
+    return { ok: true };
+  } catch (e) {
+    if (e.status === 401 && e.login) hpWrongPasswordHint = e.hp || "";
+    const msg = hpErrorText(e);
+    const prev = (await readDoc("handelsplan", "status").catch(() => null)) || {};
+    await upsertDoc("handelsplan", "status", Object.assign({}, prev, { gekoppeld: true, ok: false, fout: msg, laatstePoging: started, bron: HANDELSPLAN_URL })).catch(() => {});
+    log("Handelsplan ophalen mislukt:", msg);
+    return { ok: false, fout: msg };
+  }
+}
 function syncHandelsplan(reason) {
   if (!dbReady) return Promise.resolve({ ok: false, fout: "Database nog niet klaar" });
   if (hpSyncing) return hpSyncing;
-  hpSyncing = (async () => {
-    const started = new Date().toISOString();
-    if (!HANDELSPLAN_URL || !HANDELSPLAN_PASSWORD) {
-      const prev = (await readDoc("handelsplan", "status").catch(() => null)) || {};
-      await upsertDoc("handelsplan", "status", Object.assign({}, prev, {
-        gekoppeld: false, ok: false, urlIngesteld: !!HANDELSPLAN_URL, wachtwoordIngesteld: !!HANDELSPLAN_PASSWORD, laatstePoging: started,
-        fout: !HANDELSPLAN_URL ? "HANDELSPLAN_URL ontbreekt" : "HANDELSPLAN_PASSWORD ontbreekt",
-      })).catch(() => {});
-      return { ok: false, fout: "Niet gekoppeld" };
-    }
-    try {
-      // Eerst één keer inloggen, zodat de twee verzoeken hieronder niet allebei een inlogsleutel aanvragen.
-      if (!hpToken) await hpLogin();
-      const [plan, markt] = await Promise.all([hpGetDoc("plan/current"), hpGetDoc("market/latest")]);
-      if (!plan) throw new Error("Er staat nog geen plan in Handelsplan.");
-      await upsertDoc("handelsplan", "plan", plan);
-      if (markt) await upsertDoc("handelsplan", "markt", markt);
-      await upsertDoc("handelsplan", "status", {
-        gekoppeld: true, ok: true, opgehaald: started, laatstePoging: started, bron: HANDELSPLAN_URL,
-        versie: plan.meta && plan.meta.version != null ? plan.meta.version : null, fout: "",
-      });
-      log(`Handelsplan bijgewerkt (${reason}, versie ${plan.meta && plan.meta.version})`);
-      return { ok: true };
-    } catch (e) {
-      const msg = hpErrorText(e);
-      const prev = (await readDoc("handelsplan", "status").catch(() => null)) || {};
-      await upsertDoc("handelsplan", "status", Object.assign({}, prev, { gekoppeld: true, ok: false, fout: msg, laatstePoging: started, bron: HANDELSPLAN_URL })).catch(() => {});
-      log("Handelsplan ophalen mislukt:", msg);
-      return { ok: false, fout: msg };
-    } finally {
-      hpSyncing = null;
-    }
-  })();
+  hpSyncing = hpSyncOnce(reason).finally(() => { hpSyncing = null; });
   return hpSyncing;
 }
 
@@ -647,6 +748,8 @@ async function api(req, res, url) {
 
   if (parts[1] === "config" && method === "GET") {
     return sendJson(req, res, 200, {
+      // Servertijd: de pagina rekent daarmee, zodat een verkeerde klok op je apparaat je niet in een andere week zet.
+      nu: Date.now(),
       spar: !!ANTHROPIC_API_KEY, model: ANTHROPIC_MODEL, db: dbReady,
       handelsplan: { url: HANDELSPLAN_URL, gekoppeld: !!(HANDELSPLAN_URL && HANDELSPLAN_PASSWORD), minuten: HP_SYNC_MINUTES },
     });

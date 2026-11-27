@@ -67,7 +67,7 @@
   function longDate(d) { return d ? d.getDate() + " " + MONTHS_LONG[d.getMonth()] + " " + d.getFullYear() : ""; }
   function rangeLabel(mon) {
     var sun = addDays(mon, 6);
-    var yr = sun.getFullYear() !== new Date().getFullYear() ? " " + sun.getFullYear() : "";
+    var yr = sun.getFullYear() !== clockNow().getFullYear() ? " " + sun.getFullYear() : "";
     return shortDate(mon) + " – " + shortDate(sun) + yr;
   }
   function dateOnly(iso) { var d = new Date(iso); return isNaN(d.getTime()) ? "" : d.getDate() + " " + MONTHS[d.getMonth()] + " " + d.getFullYear(); }
@@ -78,12 +78,16 @@
   function avgOf(a) { return a.length ? a.reduce(function (s, v) { return s + v; }, 0) / a.length : null; }
 
   /* ---------- Tijd tot een datum en korte teksten ---------- */
+  // De tijd van de server is leidend: loopt de klok van dit apparaat ernaast, dan klopt je week toch.
+  // clockOffset = servertijd min apparaattijd, gezet zodra /api/config binnen is (kleine afwijkingen negeren we).
+  var clockOffset = 0;
+  function clockNow() { return new Date(Date.now() + clockOffset); }
   function dayNum(d) { return Math.round(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 864e5); }
-  function today0() { var n = new Date(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); }
+  function today0() { var n = clockNow(); return new Date(n.getFullYear(), n.getMonth(), n.getDate()); }
   function monthYear(d) { return MONTHS[d.getMonth()] + " " + d.getFullYear(); }
-  function dateShortY(d) { return shortDate(d) + (d.getFullYear() !== new Date().getFullYear() ? " " + d.getFullYear() : ""); }
+  function dateShortY(d) { return shortDate(d) + (d.getFullYear() !== clockNow().getFullYear() ? " " + d.getFullYear() : ""); }
   function countdown(d) {
-    var n = dayNum(d) - dayNum(new Date()), a = Math.abs(n), t;
+    var n = dayNum(d) - dayNum(clockNow()), a = Math.abs(n), t;
     if (n === 0) return { text: "vandaag", n: 0, over: false };
     if (a >= 61) t = Math.round(a / 30.44) + " mnd";
     else if (a >= 14) t = Math.round(a / 7) + " wk";
@@ -129,6 +133,10 @@
       svg.append(sv("path", { d: "M4 14.5V2.2M4 2.6h8.3l-1.9 2.9 1.9 2.9H4", stroke: "currentColor", "stroke-width": 1.6, "stroke-linecap": "round", "stroke-linejoin": "round" }));
     } else if (kind === "step") {
       svg.append(sv("path", { d: "M8 1.8 14.2 8 8 14.2 1.8 8z", stroke: "currentColor", "stroke-width": 1.6, "stroke-linejoin": "round" }));
+    } else if (kind === "check") {
+      svg.append(sv("path", { d: "M3.6 8.4 6.6 11.3 12.4 5", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
+    } else if (kind === "chev") {
+      svg.append(sv("path", { d: "M4.3 6.2 8 9.9l3.7-3.7", stroke: "currentColor", "stroke-width": 1.8, "stroke-linecap": "round", "stroke-linejoin": "round" }));
     } else {
       svg.append(sv("circle", { cx: 8, cy: 8, r: 6.2, stroke: "currentColor", "stroke-width": 1.6 }), sv("path", { d: "M8 4.8V8l2.1 1.4", stroke: "currentColor", "stroke-width": 1.6, "stroke-linecap": "round" }));
     }
@@ -166,6 +174,7 @@
     db: null, user: null, owner: null, sparOn: false,
     status: "loading",
     settings: {}, goals: {}, weeks: {}, notes: [], invest: {}, hp: {}, hpCfg: {},
+    visie: null, visieDraft: null, visieFase: null,
     dirty: new Set(), deleted: new Set(),
     loaded: { doelen: false, weken: false, notities: false, invest: false, instellingen: false, handelsplan: false },
     view: "overzicht", selMon: null,
@@ -219,11 +228,11 @@
   }
 
   /* ================= Jaar en weken ================= */
-  function thisMonday() { return mondayOf(new Date()); }
+  function thisMonday() { return mondayOf(clockNow()); }
   function yearStart() { var s = parseYmd(S.settings.startMaandag); return s ? mondayOf(s) : thisMonday(); }
   function yearWeeks() { var st = yearStart(), out = []; for (var i = 0; i < 52; i++) out.push(addDays(st, 7 * i)); return out; }
   function weekState(mon) { var c = thisMonday().getTime(), t = mon.getTime(); return t === c ? "current" : t < c ? "past" : "future"; }
-  function paceNow() { var n = new Date(), di = (n.getDay() + 6) % 7; return (di + (n.getHours() + n.getMinutes() / 60) / 24) / 7; }
+  function paceNow() { var n = clockNow(), di = (n.getDay() + 6) % 7; return (di + (n.getHours() + n.getMinutes() / 60) / 24) / 7; }
 
   function goalsSorted() {
     return Object.keys(S.goals).map(function (id) { return Object.assign({ id: id }, S.goals[id]); })
@@ -437,11 +446,16 @@
       .sort(function (a, b) { if (a.d && b.d) return a.d - b.d; if (a.d) return -1; if (b.d) return 1; return a.i - b.i; });
   }
   function greeting() {
-    var hr = new Date().getHours();
+    var hr = clockNow().getHours();
     var g = hr < 6 ? "Goedenacht" : hr < 12 ? "Goedemorgen" : hr < 18 ? "Goedemiddag" : "Goedenavond";
     var naam = String(S.settings.naam || "").trim();
-    var d = new Date();
-    return g + (naam ? ", " + naam : "") + ". Het is " + DAYS[d.getDay()] + " " + d.getDate() + " " + MONTHS_LONG[d.getMonth()] + ".";
+    var d = clockNow();
+    var out = g + (naam ? ", " + naam : "") + ". Het is " + DAYS[d.getDay()] + " " + d.getDate() + " " + MONTHS_LONG[d.getMonth()] + ".";
+    if (Math.abs(clockOffset) >= 36e5) {
+      var days = Math.round(Math.abs(clockOffset) / 864e5);
+      out += " De klok van dit apparaat loopt " + (days >= 1 ? days + (days === 1 ? " dag" : " dagen") : "meer dan een uur") + (clockOffset > 0 ? " achter" : " voor") + "; Koersplan rekent met de echte datum.";
+    }
+    return out;
   }
 
   /* ================= Render: kop ================= */
@@ -482,6 +496,15 @@
     $("#ov-next").disabled = st !== "past";
     $("#ov-today").hidden = st === "current";
     $(".hero-cap").textContent = st === "current" ? "Effectiviteit deze week" : st === "past" ? "Effectiviteit die week" : "Effectiviteit";
+    // Een oude week open? Dan staat dat vlak boven de vakjes, zodat je niet per ongeluk in de verkeerde week afvinkt.
+    var pastNote = $("#ov-past");
+    if (st === "past") {
+      var cur = isoWeek(thisMonday()).week;
+      pastNote.replaceChildren(
+        h("p", null, "Je vinkt af voor ", h("strong", { text: "week " + isoWeek(mon).week }), " (" + rangeLabel(mon) + "). Het is nu week " + cur + "."),
+        h("button", { type: "button", class: "btn primary sm", text: "Naar week " + cur, onclick: function () { S.selMon = null; renderOverview(); } }));
+      pastNote.hidden = false;
+    } else pastNote.hidden = true;
 
     var items = itemsFor(mon), r = scoreItems(items), score = r.score;
     var chipBox = $("#ov-chip"); chipBox.replaceChildren();
@@ -662,7 +685,7 @@
     var b = clone(g), hit = false;
     (b.acties || []).forEach(function (a) { if (a.id === aid) { a.perWeek = clamp(Math.round(to), 1, 14); hit = true; } });
     if (!hit) return;
-    b.concept = false; b.bijgewerkt = new Date().toISOString();
+    b.concept = false; b.bijgewerkt = clockNow().toISOString();
     S.goals[gid] = b; queueWrite("doelen/" + gid, b, 0);
     renderAll();
     toast("Lat staat op " + to + "× per week. Deze week telt dat als 100%.");
@@ -699,7 +722,7 @@
   }
   function saveWeekItems(mon, items, delay) {
     var key = weekKey(mon), prev = S.weeks[key] || {};
-    var doc = { maandag: ymd(mon), items: items, reflectie: prev.reflectie || "", bijgewerkt: new Date().toISOString() };
+    var doc = { maandag: ymd(mon), items: items, reflectie: prev.reflectie || "", bijgewerkt: clockNow().toISOString() };
     S.weeks[key] = doc;
     queueWrite("weken/" + key, doc, delay);
   }
@@ -707,10 +730,438 @@
   function saveReflection(mon, val) {
     if (!canWrite()) return;
     var key = weekKey(mon);
-    var doc = { maandag: ymd(mon), items: clone(itemsFor(mon)), reflectie: String(val).slice(0, 4000), bijgewerkt: new Date().toISOString() };
+    var doc = { maandag: ymd(mon), items: clone(itemsFor(mon)), reflectie: String(val).slice(0, 4000), bijgewerkt: clockNow().toISOString() };
     S.weeks[key] = doc;
     queueWrite("weken/" + key, doc, 0);
     $("#ov-reflect-state").textContent = "Opgeslagen";
+  }
+
+  /* ================= Je toekomst: wie je wordt, waarom, hoe je er komt, per gebied en het pad ================= */
+  // Staat in instellingen/visie. Bovenaan Doelen: je toekomst in één zin, waarom je dat wilt en hoe je er komt.
+  // Daaronder per gebied (werk, geld, wonen …) hoe het eruitziet, hoe je er komt en je volgende stap, je geld nu en
+  // later, en het pad: fasen met een periode (JJJJ-MM) en tussendoelen met een datum en een gebied, die je afvinkt.
+  function vis() { var v = S.visie; return v && (String(v.rol || "").trim() || String(v.zin || "").trim()) ? v : null; }
+  function lcFirst(s) { s = String(s || "").trim(); return /^[A-Z][a-z]/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s; }
+  function ymDate(s) { var m = /^(\d{4})-(\d{2})/.exec(String(s || "")); return m ? new Date(+m[1], +m[2] - 1, 1) : null; }
+  function ymText(s) { var d = ymDate(s); return d ? MONTHS[d.getMonth()] + " " + d.getFullYear() : ""; }
+  function ymLong(s) { var d = ymDate(s); return d ? MONTHS_LONG[d.getMonth()] + " " + d.getFullYear() : ""; }
+  function phaseRange(f) { var a = ymText(f.van), b = ymText(f.tot); return a && b ? a + " – " + b : a ? "vanaf " + a : b ? "tot " + b : ""; }
+  // De fase waarin je nu zit: de eerste die nog niet voorbij is ('tot' telt de hele maand mee).
+  function phaseNowIdx(v) {
+    var fs = v.fasen || [], t = clockNow().getTime();
+    for (var i = 0; i < fs.length; i++) {
+      var e = ymDate(fs[i].tot);
+      if (!e || new Date(e.getFullYear(), e.getMonth() + 1, 1).getTime() > t) return i;
+    }
+    return Math.max(0, fs.length - 1);
+  }
+  function tdList(f) { return (f.tussendoelen || []).filter(function (x) { return x && String(x.tekst || "").trim(); }); }
+  // Tussendoelen op datum (zonder datum achteraan). Een gehaald tussendoel blijft op zijn plek in de tijdlijn staan,
+  // zodat de lijst niet verspringt als je iets afvinkt.
+  function tdSorted(f) {
+    return tdList(f).map(function (x, i) { var d = parseYmd(x.datum); return { x: x, i: i, t: d ? d.getTime() : 9e15 }; })
+      .sort(function (a, b) { return a.t - b.t || a.i - b.i; })
+      .map(function (o) { return o.x; });
+  }
+  function gebiedenOf(v) { return (v.gebieden || []).filter(function (g) { return g && g.id && String(g.naam || "").trim(); }); }
+  function gebiedNaam(v, id) { var g = id ? gebiedenOf(v).filter(function (x) { return x.id === id; })[0] : null; return g ? g.naam : ""; }
+  // Je volgende stap: het eerste open tussendoel, fase voor fase en binnen een fase op datum. Met gid alleen dat gebied.
+  // Een open tussendoel uit een fase die al voorbij is, komt dus eerst: dat staat nog open.
+  function nextTd(v, gid) {
+    var fs = v.fasen || [];
+    for (var i = 0; i < fs.length; i++) {
+      var o = tdSorted(fs[i]).filter(function (x) { return !x.klaar && (!gid || x.gebied === gid); });
+      if (o.length) return { f: fs[i], i: i, t: o[0] };
+    }
+    return null;
+  }
+  function tdCount(v, gid) {
+    var n = 0, done = 0;
+    (v.fasen || []).forEach(function (f) { tdList(f).forEach(function (x) { if (!gid || x.gebied === gid) { n++; if (x.klaar) done++; } }); });
+    return { n: n, done: done };
+  }
+  function visieZin(v) {
+    if (String(v.zin || "").trim()) return String(v.zin).trim();
+    var hz = String(v.horizon || "").trim();
+    return (hz ? "Over " + hz + " ben je " : "Je wordt ") + lcFirst(v.rol) + (String(v.specialisme || "").trim() ? ", gespecialiseerd in " + String(v.specialisme).trim() : "") + ".";
+  }
+  // Een regel als "Vrijheid. Je kiest zelf …" krijgt een vette kop met de uitleg eronder. Zonder korte kop blijft het één tekst.
+  function leadSplit(s) {
+    s = String(s || "").trim();
+    var m = /^(.{2,64}?[.!?:])\s+(\S[\s\S]*)$/.exec(s);
+    return m ? { kop: m[1].replace(/:$/, ""), rest: m[2] } : { kop: "", rest: s };
+  }
+  var TELWOORD = ["Geen", "Eén", "Twee", "Drie", "Vier", "Vijf", "Zes", "Zeven", "Acht"];
+  // Bedragen niet over twee regels: "€ 300" krijgt een vaste spatie.
+  function nb(s) { return String(s == null ? "" : s).replace(/€ (?=\d)/g, "€\u00a0"); }
+
+  function renderVisie() {
+    var band = $("#visie-band"), body = $("#visie-body"); if (!band || !body) return;
+    if (S.visieDraft) { renderVisieForm(band, body); return; }
+    var v = vis(), writable = canWrite(), w = h("div", { class: "wrap" });
+    band.replaceChildren(w);
+    if (!S.loaded.instellingen) { w.append(h("p", { class: "visie-kicker", text: "Laden…" })); body.replaceChildren(); return; }
+    if (!v) {
+      appendKids(w, [h("p", { class: "visie-kicker", text: "Je toekomst" }),
+        h("h1", { class: "visie-zin", text: "Waar wil je over een paar jaar staan?" }),
+        h("p", { class: "visie-kern", text: "Leg je toekomst vast: wie je wordt, waarom je dat wilt, hoe je er komt en hoe je leven er per gebied uitziet. Dan zie je elke week waar je het voor doet." }),
+        writable ? h("p", { class: "visie-cta" }, h("button", { class: "btn primary", type: "button", text: "Toekomst vastleggen", onclick: startVisieEdit })) : null]);
+      body.replaceChildren();
+      return;
+    }
+    var gs = gebiedenOf(v), fs = v.fasen || [], werkIn = gs.some(function (g) { return g.id === "werk"; });
+    appendKids(w, [
+      h("div", { class: "visie-top" },
+        h("p", { class: "visie-kicker", text: "Je toekomst" }),
+        writable ? h("button", { class: "link-btn", type: "button", text: "Toekomst bewerken", onclick: startVisieEdit }) : null),
+      h("h1", { class: "visie-zin", text: visieZin(v) }),
+      v.kern ? h("p", { class: "visie-kern", text: v.kern }) : null,
+      gs.length ? gebiedNav(gs) : null,
+      !werkIn && (v.themas || []).length ? h("ul", { class: "visie-themas", "aria-label": "Waar je in uitblinkt" }, v.themas.map(function (t) { return h("li", { text: t }); })) : null,
+      !werkIn && v.werkwijze ? h("p", { class: "visie-werk", text: v.werkwijze }) : null]);
+    body.replaceChildren.apply(body, [waaromHoe(v), gs.length ? gebiedenSectie(v, gs) : null, geldKaarten(v), fs.length ? padSectie(v) : null].filter(Boolean));
+  }
+  // In de band: je gebieden als knoppen die naar dat gebied verderop springen.
+  function gebiedNav(gs) {
+    return h("nav", { class: "visie-nav", "aria-label": "Naar je toekomst per gebied" },
+      h("ul", null, gs.map(function (g) {
+        return h("li", null, h("button", { type: "button", class: "visie-chip", onclick: function () { naarGebied(g.id); } }, h("span", { text: g.naam }), icon("chev")));
+      })));
+  }
+  function naarGebied(id) {
+    var el = document.getElementById("gebied-" + id); if (!el) return;
+    var still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({ block: "start", behavior: still ? "auto" : "smooth" });
+    var hd = document.getElementById("gb-" + id); if (hd) hd.focus({ preventScroll: true });
+  }
+  // Waarom je dit wilt en hoe je het bereikt, naast elkaar (op een smal scherm onder elkaar).
+  function waaromHoe(v) {
+    var wy = (v.waarom || []).filter(Boolean), hw = (v.hoe || []).filter(Boolean);
+    if (!wy.length && !hw.length) return null;
+    function kolom(id, kop, intro, items) {
+      if (!items.length) return null;
+      return h("section", { class: "wh-col", "aria-labelledby": id },
+        h("h2", { class: "wh-h", id: id, text: kop }),
+        intro ? h("p", { class: "wh-intro", text: intro }) : null,
+        h("ul", { class: "wh-list" }, items.map(function (s) {
+          var p = leadSplit(s);
+          return h("li", null, p.kop ? h("strong", { class: "wh-kop", text: p.kop }) : null, h("span", { class: p.kop ? "wh-rest" : "wh-rest solo", text: p.rest }));
+        })));
+    }
+    var cols = [kolom("wh-waarom", "Waarom je dit wilt", v.waaromIntro, wy), kolom("wh-hoe", "Hoe je dit bereikt", v.hoeIntro, hw)].filter(Boolean);
+    return h("div", { class: "panel wh" + (cols.length === 1 ? " single" : "") }, cols);
+  }
+  // Per gebied: hoe het eruitziet, hoe je er komt en je volgende stap (het eerste open tussendoel in dat gebied).
+  function gebiedenSectie(v, gs) {
+    var hz = String(v.horizon || "").trim();
+    return h("section", { class: "vs", "aria-labelledby": "vs-gebied" },
+      h("div", { class: "vs-head" },
+        h("h2", { id: "vs-gebied", text: "Je toekomst per gebied" }),
+        h("p", { class: "lede", text: "Hoe je leven er " + (hz ? "over " + hz : "later") + " uitziet, hoe je er komt en wat je volgende stap is." })),
+      h("div", { class: "gb" }, gs.map(function (g) {
+        var hoe = (g.hoe || []).filter(Boolean), c = tdCount(v, g.id), nx = nextTd(v, g.id);
+        var nd = nx && parseYmd(nx.t.datum), ncd = nd && countdown(nd);
+        return h("section", { class: "gb-row", id: "gebied-" + g.id, "aria-labelledby": "gb-" + g.id },
+          h("div", { class: "gb-side" },
+            h("h3", { class: "gb-naam", id: "gb-" + g.id, tabindex: "-1", text: g.naam }),
+            c.n ? h("p", { class: "gb-prog", text: c.done + " van " + c.n + " tussendoelen gehaald" }) : null),
+          h("div", { class: "gb-main" },
+            g.beeld ? h("p", { class: "gb-beeld", text: nb(g.beeld) }) : null,
+            g.id === "werk" && (v.themas || []).length ? h("ul", { class: "gb-themas", "aria-label": "Waar je in uitblinkt" }, v.themas.map(function (t) { return h("li", { text: t }); })) : null,
+            g.id === "werk" && v.werkwijze ? h("p", { class: "gb-werk", text: v.werkwijze }) : null,
+            hoe.length ? h("div", { class: "gb-hoe" }, h("h4", { class: "gb-k", text: "Zo kom je er" }), h("ul", null, hoe.map(function (t) { return h("li", { text: nb(t) }); }))) : null),
+          h("div", { class: "gb-next" },
+            h("h4", { class: "gb-k", text: "Volgende stap" }),
+            nx ? h("p", { class: "gb-nt", text: nx.t.tekst }) : h("p", { class: "gb-none", text: c.n ? "Alle tussendoelen gehaald." : "Nog geen tussendoel in dit gebied. Voeg er een toe met Toekomst bewerken." }),
+            nx ? h("p", { class: "gb-nd" + (ncd && ncd.over ? " over" : "") }, nd ? dateShortY(nd) + ", " + ncd.text : "Fase " + (nx.i + 1) + ", nog zonder datum") : null));
+      })));
+  }
+  function geldKaarten(v) {
+    function kaart(key, kop) {
+      var m = v[key] || {}, pts = (m.punten || []).filter(Boolean);
+      if (!m.titel && !m.tekst && !pts.length) return null;
+      return h("section", { class: "panel geld geld-" + key, "aria-label": kop },
+        h("h2", { class: "geld-h", text: kop }),
+        m.titel ? h("p", { class: "geld-titel", text: nb(m.titel) }) : null,
+        m.tekst ? h("p", { class: "geld-tekst", text: nb(m.tekst) }) : null,
+        pts.length ? h("ul", { class: "geld-punten" }, pts.map(function (p) { return h("li", { text: nb(p) }); })) : null);
+    }
+    var a = kaart("nu", "Zo verdien je nu je geld"), b = kaart("later", "Zo verdien je later je geld");
+    return a || b ? h("div", { class: "geld-grid" }, a, b) : null;
+  }
+  // Het pad: de fasen als stappen met daaronder de tussendoelen van de gekozen fase.
+  function padSectie(v) {
+    var fs = v.fasen, a = ymLong(fs[0].van), b = ymLong(fs[fs.length - 1].tot);
+    if (S.visieFase == null || S.visieFase >= fs.length) S.visieFase = phaseNowIdx(v);
+    return h("section", { class: "vs", "aria-labelledby": "vs-pad" },
+      h("div", { class: "vs-head" },
+        h("h2", { id: "vs-pad", text: "Het pad" }),
+        h("p", { class: "lede", text: (fs.length === 1 ? "Eén fase" : (TELWOORD[fs.length] || fs.length) + " fasen") + (a && b ? ", van " + a + " tot " + b : "") + ". Kies een fase voor de tussendoelen en vink ze af zodra je ze haalt." })),
+      h("div", { class: "panel pad-panel" }, padStepper(v), fasePanel(v)));
+  }
+  function padStepper(v) {
+    var fs = v.fasen, now = phaseNowIdx(v);
+    var nav = h("div", { class: "pad", role: "tablist", "aria-label": "De fasen van je pad" });
+    function pick(j) {
+      S.visieFase = j;
+      var p = $(".pad-panel"); if (!p) { renderVisie(); return; }
+      p.replaceChildren(padStepper(v), fasePanel(v));
+      var b = document.getElementById("pad-" + j); if (b) b.focus();
+    }
+    fs.forEach(function (f, i) {
+      var tds = tdList(f), done = tds.filter(function (x) { return x.klaar; }).length;
+      var st = i < now ? "past" : i === now ? "now" : "next", sel = S.visieFase === i;
+      nav.append(h("button", {
+        type: "button", role: "tab", class: "pad-step " + st, id: "pad-" + i, "aria-selected": sel ? "true" : "false", "aria-controls": "fase-panel", tabindex: sel ? "0" : "-1",
+        onclick: function () { pick(i); },
+        onkeydown: function (e) {
+          var k = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+          if (k) { e.preventDefault(); pick((i + k + fs.length) % fs.length); }
+        },
+      },
+        h("span", { class: "pad-dot", "aria-hidden": "true" }, st === "past" ? icon("check") : String(i + 1)),
+        h("span", { class: "pad-txt" },
+          h("span", { class: "pad-name", text: f.naam || "Fase " + (i + 1) }),
+          h("span", { class: "pad-when", text: phaseRange(f) }),
+          h("span", { class: "pad-prog", text: (st === "now" ? "Je bent hier. " : "") + (tds.length ? done + " van " + tds.length + " gehaald" : "nog geen tussendoelen") }))));
+    });
+    return nav;
+  }
+  function fasePanel(v) {
+    var fs = v.fasen, i = S.visieFase, f = fs[i], writable = canWrite();
+    var box = h("div", { class: "fase", id: "fase-panel", role: "tabpanel", "aria-labelledby": "pad-" + i });
+    var tds = tdSorted(f), done = tds.filter(function (x) { return x.klaar; }).length;
+    box.append(h("div", { class: "fase-head" },
+      h("h3", { text: "Fase " + (i + 1) + ": " + (f.naam || "") }),
+      tds.length ? h("span", { class: "fase-count", text: done + " van " + tds.length + " gehaald" }) : null));
+    if (f.doel) box.append(h("p", { class: "fase-doel", text: f.doel }));
+    if (!tds.length) { box.append(h("p", { class: "hint fase-leeg", text: "Nog geen tussendoelen in deze fase. Voeg ze toe met Toekomst bewerken." })); return box; }
+    var tags = tds.some(function (x) { return gebiedNaam(v, x.gebied); });
+    box.append(h("ul", { class: "td-list" + (tags ? " has-tags" : "") }, tds.map(function (x) {
+      var d = parseYmd(x.datum), cd = d && !x.klaar ? countdown(d) : null, ko = x.klaar && parseYmd(x.klaarOp);
+      var g = x.doel && S.goals[x.doel], gn = gebiedNaam(v, x.gebied);
+      return h("li", { class: x.klaar ? "done" : "" }, h("label", null,
+        h("input", { type: "checkbox", id: "td-" + f.id + "-" + x.id, checked: !!x.klaar, disabled: !writable, onchange: function (e) { toggleTd(f.id, x.id, e.target.checked); } }),
+        h("span", { class: "td-t", text: x.tekst }),
+        h("span", { class: "td-side" },
+          tags ? h("span", { class: "td-tag", text: gn || "" }) : null,
+          x.klaar ? h("span", { class: "td-d", text: ko ? "gehaald " + dateShortY(ko) : "gehaald" })
+            : d ? h("span", { class: "td-d" + (cd.over ? " over" : ""), text: dateShortY(d) + ", " + cd.text }) : null),
+        g ? h("span", { class: "td-g", text: "Elke week via je doel " + g.titel }) : null));
+    })));
+    return box;
+  }
+  function toggleTd(fid, tid, val) {
+    if (!canWrite()) return;
+    var v = clone(S.visie) || {}, f = (v.fasen || []).filter(function (x) { return x.id === fid; })[0];
+    var t = f && (f.tussendoelen || []).filter(function (x) { return x.id === tid; })[0];
+    if (!t) return;
+    t.klaar = !!val;
+    if (val) t.klaarOp = ymd(clockNow()); else delete t.klaarOp;
+    v.bijgewerkt = clockNow().toISOString();
+    S.visie = v;
+    queueWrite("instellingen/visie", v, 200);
+    // Alles wordt opnieuw opgebouwd (ook de volgende stap per gebied). Houd het pad op dezelfde plek in beeld.
+    var a0 = $(".pad-panel"), top0 = a0 ? a0.getBoundingClientRect().top : null;
+    renderVisie(); renderOvVisie(); renderOvKoers();
+    var a1 = $(".pad-panel");
+    if (a1 && top0 != null) { var dy = a1.getBoundingClientRect().top - top0; if (Math.abs(dy) > 1) window.scrollBy(0, dy); }
+    var cb = document.getElementById("td-" + fid + "-" + tid);
+    if (cb) {
+      cb.focus({ preventScroll: true });
+      var r = cb.getBoundingClientRect();
+      if (r.top < 80 || r.bottom > window.innerHeight) cb.scrollIntoView({ block: "nearest" });
+    }
+    if (val) toast("Tussendoel gehaald.");
+  }
+
+  // Op Overzicht: in drie regels waar je naartoe werkt, in welke fase je zit en wat je volgende stap is.
+  function renderOvVisie() {
+    var box = $("#ov-visie"); if (!box) return;
+    if (!S.loaded.instellingen) { box.hidden = true; return; }
+    var v = vis();
+    box.hidden = false;
+    if (!v) {
+      box.replaceChildren(h("div", { class: "ovv-main" },
+        h("p", { class: "ovv-rol", text: "Waar werk je naartoe?" }),
+        h("p", { class: "ovv-fase", text: "Leg je toekomst vast: wie je over een paar jaar bent, waarom je dat wilt en hoe je er komt." })),
+        h("div", { class: "ovv-side" }, h("a", { class: "link-btn", href: "#doelen", text: "Toekomst vastleggen" })));
+      return;
+    }
+    var fs = v.fasen || [], i = phaseNowIdx(v), f = fs[i], nx = nextTd(v), nd = nx && parseYmd(nx.t.datum), ncd = nd && countdown(nd);
+    var gn = nx && gebiedNaam(v, nx.t.gebied);
+    box.replaceChildren(
+      h("div", { class: "ovv-main" },
+        h("p", { class: "ovv-rol", text: String(v.rol || "").trim() ? "Op weg naar " + lcFirst(v.rol) : cut(visieZin(v), 140) }),
+        f ? h("p", { class: "ovv-fase", text: "Fase " + (i + 1) + " van " + fs.length + ": " + lcFirst(f.naam || "") + (f.tot ? ", tot " + ymText(f.tot) : "") }) : null,
+        nx ? h("p", { class: "ovv-next" },
+          h("span", { class: "ovv-k", text: "Volgende stap" }),
+          gn ? h("span", { class: "td-tag", text: gn }) : null,
+          h("span", { class: "ovv-t", text: nx.t.tekst }),
+          nd ? h("span", { class: "ovv-d" + (ncd.over ? " over" : ""), text: dateShortY(nd) + ", " + ncd.text }) : null) : null),
+      h("div", { class: "ovv-side" },
+        fs.length > 1 ? h("span", { class: "ovv-dots", "aria-hidden": "true" }, fs.map(function (x, j) { return h("i", { class: j < i ? "past" : j === i ? "now" : "" }); })) : null,
+        h("a", { class: "link-btn", href: "#doelen", text: "Bekijk je toekomst" })));
+  }
+
+  /* ---------- Je toekomst bewerken ---------- */
+  function startVisieEdit() {
+    if (!canWrite()) return;
+    var b = clone(S.visie) || {};
+    function geld(m) { m = m || {}; return { titel: m.titel || "", tekst: m.tekst || "", punten: (m.punten || []).join("\n") }; }
+    S.visieDraft = {
+      zin: b.zin || "", rol: b.rol || "", specialisme: b.specialisme || "", horizon: b.horizon || "", kern: b.kern || "",
+      themas: (b.themas || []).join("\n"), werkwijze: b.werkwijze || "",
+      waaromIntro: b.waaromIntro || "", waarom: (b.waarom || []).join("\n"),
+      hoeIntro: b.hoeIntro || "", hoe: (b.hoe || []).join("\n"),
+      gebieden: (b.gebieden || []).map(function (g) { return { id: g.id || rid("g"), naam: g.naam || "", beeld: g.beeld || "", hoe: (g.hoe || []).join("\n") }; }),
+      nu: geld(b.nu), later: geld(b.later),
+      fasen: (b.fasen || []).map(function (f) {
+        return { id: f.id || rid("f"), naam: f.naam || "", van: f.van || "", tot: f.tot || "", doel: f.doel || "",
+          tussendoelen: (f.tussendoelen || []).map(function (t) { return Object.assign({}, t, { id: t.id || rid("t"), gebied: t.gebied || "" }); }) };
+      }),
+    };
+    if (!S.visieDraft.fasen.length) S.visieDraft.fasen.push({ id: rid("f"), naam: "", van: "", tot: "", doel: "", tussendoelen: [] });
+    renderVisie();
+    window.scrollTo(0, 0);
+    var el = document.getElementById("ve-zin"); if (el) el.focus({ preventScroll: true });
+  }
+  // Twee keer klikken om te verwijderen, zodat je niet per ongeluk een hele fase of een gebied kwijt bent.
+  function armBtn(label, armedLabel, fn) {
+    var b = h("button", { type: "button", class: "link-btn vf-del", text: label }), armed = false, tm;
+    b.addEventListener("click", function () {
+      if (!armed) { armed = true; b.textContent = armedLabel; tm = setTimeout(function () { armed = false; b.textContent = label; }, 3000); return; }
+      clearTimeout(tm); fn();
+    });
+    return b;
+  }
+  function renderVisieForm(band, body) {
+    var d = S.visieDraft;
+    band.replaceChildren(h("div", { class: "wrap" }, h("p", { class: "visie-kicker", text: "Je toekomst" }), h("h1", { class: "visie-zin", text: "Je toekomst bewerken" })));
+    function field(id, label, el, hint) { return h("div", { class: "field" }, h("label", { for: id, text: label }), el, hint ? h("span", { class: "hint", text: hint }) : null); }
+    function inp(id, val, set, ph, max, type) { return h("input", { id: id, type: type || "text", maxlength: max || 160, value: val || "", placeholder: ph || "", oninput: function (e) { set(e.target.value); } }); }
+    function ta(id, val, set, rows, ph) { return h("textarea", { id: id, rows: rows || 3, maxlength: 4000, value: val || "", placeholder: ph || "", oninput: function (e) { set(e.target.value); growTa(e.target); } }); }
+    function gebiedLabel(g, i) { return String(g.naam || "").trim() || "Gebied " + (i + 1); }
+    var KOP_HINT = "Eén per regel. Begin met een korte kop en een punt, dan wordt die vet: Vrijheid. Je kiest zelf …";
+    var form = h("form", { class: "panel visie-form", onsubmit: function (e) { e.preventDefault(); saveVisieDraft(); } });
+    form.append(
+      h("h2", { class: "vf-h", text: "Je toekomst in één zin" }),
+      field("ve-zin", "Zo ziet je toekomst eruit", ta("ve-zin", d.zin, function (x) { d.zin = x; }, 3, "Bijv. Over 3 tot 6 jaar ben je …, woon je … en …"), "Staat groot bovenaan Doelen. Laat je hem leeg, dan maakt Koersplan een zin van je rol."),
+      h("div", { class: "g-form-grid two" },
+        field("ve-hor", "Over hoeveel tijd", inp("ve-hor", d.horizon, function (x) { d.horizon = x; }, "Bijv. 3 tot 6 jaar", 40)),
+        field("ve-kern", "Toelichting onder je zin (optioneel)", inp("ve-kern", d.kern, function (x) { d.kern = x; }, "", 600))),
+      h("h2", { class: "vf-h", text: "Je werk" }),
+      h("div", { class: "g-form-grid two" },
+        field("ve-rol", "De rol waar je naartoe werkt", inp("ve-rol", d.rol, function (x) { d.rol = x; }, "Bijv. senior integraal ontwerpadviseur", 80)),
+        field("ve-spec", "Gespecialiseerd in (optioneel)", inp("ve-spec", d.specialisme, function (x) { d.specialisme = x; }, "Bijv. duurzaamheid en regelgeving", 80))),
+      field("ve-them", "Waar je in uitblinkt, één per regel", ta("ve-them", d.themas, function (x) { d.themas = x; }, 5), "Staat bij het gebied Werk."),
+      field("ve-werk", "Hoe je werkt (optioneel)", ta("ve-werk", d.werkwijze, function (x) { d.werkwijze = x; }, 2)),
+      h("h2", { class: "vf-h", text: "Waarom je dit wilt" }),
+      field("ve-wi", "Inleiding (optioneel)", inp("ve-wi", d.waaromIntro, function (x) { d.waaromIntro = x; }, "Bijv. Dit is waar je het voor doet.", 240)),
+      field("ve-why", "Je redenen", ta("ve-why", d.waarom, function (x) { d.waarom = x; }, 6), KOP_HINT),
+      h("h2", { class: "vf-h", text: "Hoe je dit bereikt" }),
+      field("ve-hi", "Inleiding (optioneel)", inp("ve-hi", d.hoeIntro, function (x) { d.hoeIntro = x; }, "Bijv. Een vaste aanpak die je elke week herhaalt.", 240)),
+      field("ve-how", "Je aanpak", ta("ve-how", d.hoe, function (x) { d.hoe = x; }, 6), KOP_HINT),
+      h("h2", { class: "vf-h", text: "Je toekomst per gebied" }));
+    d.gebieden.forEach(function (g, gi) {
+      var box = h("fieldset", { class: "vf-box" }, h("legend", { text: gebiedLabel(g, gi) }));
+      box.append(
+        field("vg-" + g.id + "-n", "Gebied", inp("vg-" + g.id + "-n", g.naam, function (x) {
+          g.naam = x;
+          var lab = gebiedLabel(g, gi);
+          box.querySelector("legend").textContent = lab;
+          form.querySelectorAll('option[value="' + g.id + '"]').forEach(function (o) { o.textContent = lab; });
+        }, "Bijv. Wonen", 40)),
+        field("vg-" + g.id + "-b", "Zo ziet het eruit", ta("vg-" + g.id + "-b", g.beeld, function (x) { g.beeld = x; }, 2)),
+        field("vg-" + g.id + "-h", "Zo kom je er, één stap per regel", ta("vg-" + g.id + "-h", g.hoe, function (x) { g.hoe = x; }, 3)),
+        h("div", { class: "vf-acts" }, armBtn("Gebied verwijderen", "Klik nogmaals om " + gebiedLabel(g, gi) + " te verwijderen", function () { d.gebieden.splice(gi, 1); renderVisie(); })));
+      form.append(box);
+    });
+    form.append(h("p", null, h("button", { type: "button", class: "link-btn", text: "Gebied toevoegen", onclick: function () { var ng = { id: rid("g"), naam: "", beeld: "", hoe: "" }; d.gebieden.push(ng); renderVisie(); var el = document.getElementById("vg-" + ng.id + "-n"); if (el) el.focus(); } })));
+    [["nu", "Zo verdien je nu je geld", "Bijv. junior bouwkundig adviseur bij Planresult"], ["later", "Zo verdien je later je geld", "Bijv. senior adviseur bij een bureau, of zelfstandig"]].forEach(function (k) {
+      var m = d[k[0]];
+      form.append(h("h2", { class: "vf-h", text: k[1] }),
+        field("ve-" + k[0] + "-t", "In één regel", inp("ve-" + k[0] + "-t", m.titel, function (x) { m.titel = x; }, k[2], 120)),
+        field("ve-" + k[0] + "-x", "Toelichting (optioneel)", ta("ve-" + k[0] + "-x", m.tekst, function (x) { m.tekst = x; }, 2)),
+        field("ve-" + k[0] + "-p", "Punten, één per regel (optioneel)", ta("ve-" + k[0] + "-p", m.punten, function (x) { m.punten = x; }, 3)));
+    });
+    form.append(h("h2", { class: "vf-h", text: "Het pad" }));
+    d.fasen.forEach(function (f, fi) {
+      var box = h("fieldset", { class: "vf-box" }, h("legend", { text: "Fase " + (fi + 1) }));
+      box.append(
+        field("vf-" + f.id + "-n", "Naam", inp("vf-" + f.id + "-n", f.naam, function (x) { f.naam = x; }, "Bijv. positioneren binnen Planresult", 80)),
+        h("div", { class: "g-form-grid two" },
+          field("vf-" + f.id + "-van", "Van (maand)", inp("vf-" + f.id + "-van", f.van, function (x) { f.van = x; }, "JJJJ-MM", 7, "month")),
+          field("vf-" + f.id + "-tot", "Tot en met (maand)", inp("vf-" + f.id + "-tot", f.tot, function (x) { f.tot = x; }, "JJJJ-MM", 7, "month"))),
+        field("vf-" + f.id + "-d", "Wat deze fase oplevert", ta("vf-" + f.id + "-d", f.doel, function (x) { f.doel = x; }, 2)));
+      var rows = h("div", { class: "rows" });
+      f.tussendoelen.forEach(function (t, ti) {
+        var sel = h("select", { id: "vtg-" + t.id, "aria-label": "Gebied van het tussendoel", onchange: function (e) { t.gebied = e.target.value; } },
+          h("option", { value: "", text: "Geen gebied" }),
+          d.gebieden.map(function (g, gi) { return h("option", { value: g.id, text: gebiedLabel(g, gi) }); }));
+        sel.value = d.gebieden.some(function (g) { return g.id === t.gebied; }) ? t.gebied : "";
+        rows.append(h("div", { class: "row-edit td" },
+          h("input", { id: "vt-" + t.id, type: "text", maxlength: 200, "aria-label": "Tussendoel", value: t.tekst || "", placeholder: "Tussendoel", oninput: function (e) { t.tekst = e.target.value; } }),
+          sel,
+          h("input", { id: "vtd-" + t.id, type: "date", "aria-label": "Datum van het tussendoel, optioneel", value: t.datum || "", oninput: function (e) { t.datum = e.target.value; } }),
+          delBtn(function () { f.tussendoelen.splice(ti, 1); renderVisie(); }, "Verwijder tussendoel", false)));
+      });
+      box.append(h("div", { class: "field" }, h("span", { class: "label", text: "Tussendoelen, met een gebied en een datum als je die weet" }), rows,
+        h("div", { class: "vf-acts" },
+          h("button", { type: "button", class: "link-btn", text: "Tussendoel toevoegen", onclick: function () { var nt = { id: rid("t"), tekst: "", datum: "", gebied: "", klaar: false }; f.tussendoelen.push(nt); renderVisie(); var el = document.getElementById("vt-" + nt.id); if (el) el.focus(); } }),
+          d.fasen.length > 1 ? armBtn("Fase verwijderen", "Klik nogmaals om fase " + (fi + 1) + " te verwijderen", function () { d.fasen.splice(fi, 1); renderVisie(); }) : null)));
+      form.append(box);
+    });
+    form.append(h("p", null, h("button", { type: "button", class: "link-btn", text: "Fase toevoegen", onclick: function () { var nf = { id: rid("f"), naam: "", van: "", tot: "", doel: "", tussendoelen: [] }; d.fasen.push(nf); renderVisie(); var el = document.getElementById("vf-" + nf.id + "-n"); if (el) el.focus(); } })),
+      h("div", { class: "form-actions" },
+        h("button", { type: "submit", class: "btn primary", text: "Opslaan" }),
+        h("button", { type: "button", class: "btn ghost", text: "Annuleren", onclick: function () { S.visieDraft = null; renderVisie(); window.scrollTo(0, 0); } })));
+    body.replaceChildren(form);
+    form.querySelectorAll("textarea").forEach(growTa);
+  }
+  // Een tekstvak groeit mee met wat erin staat, zodat je lange lijsten in één keer ziet.
+  function growTa(el) { el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight + 2, 560) + "px"; }
+  function saveVisieDraft() {
+    var d = S.visieDraft; if (!d || !canWrite()) return;
+    function txt(s, max) { return String(s || "").trim().slice(0, max); }
+    function lines(s, max, n) { return String(s || "").split(/\n+/).map(function (x) { return x.trim().slice(0, max); }).filter(Boolean).slice(0, n); }
+    function geld(m) { return { titel: txt(m.titel, 120), tekst: txt(m.tekst, 800), punten: lines(m.punten, 240, 8) }; }
+    if (!txt(d.zin, 400) && !txt(d.rol, 80)) {
+      toast("Vul in wie je wordt: een zin over je toekomst of de rol waar je naartoe werkt.");
+      var el = document.getElementById("ve-zin"); if (el) el.focus();
+      return;
+    }
+    var gebieden = d.gebieden.map(function (g) { return { id: g.id, naam: txt(g.naam, 40), beeld: txt(g.beeld, 800), hoe: lines(g.hoe, 240, 8) }; })
+      .filter(function (g) { return g.naam; });
+    var ids = gebieden.map(function (g) { return g.id; });
+    var old = S.visie || {};
+    var body = {
+      zin: txt(d.zin, 400), rol: txt(d.rol, 80), specialisme: txt(d.specialisme, 80), horizon: txt(d.horizon, 40), kern: txt(d.kern, 600),
+      themas: lines(d.themas, 90, 12), werkwijze: txt(d.werkwijze, 600),
+      waaromIntro: txt(d.waaromIntro, 240), waarom: lines(d.waarom, 320, 10),
+      hoeIntro: txt(d.hoeIntro, 240), hoe: lines(d.hoe, 320, 10),
+      gebieden: gebieden,
+      nu: geld(d.nu), later: geld(d.later),
+      fasen: d.fasen.map(function (f) {
+        return {
+          id: f.id, naam: txt(f.naam, 80), van: /^\d{4}-\d{2}$/.test(f.van) ? f.van : "", tot: /^\d{4}-\d{2}$/.test(f.tot) ? f.tot : "", doel: txt(f.doel, 600),
+          tussendoelen: f.tussendoelen.filter(function (t) { return String(t.tekst || "").trim(); }).map(function (t) {
+            var o = { id: t.id, tekst: txt(t.tekst, 200), datum: parseYmd(t.datum) ? t.datum : "", klaar: !!t.klaar };
+            if (t.gebied && ids.indexOf(t.gebied) >= 0) o.gebied = t.gebied;
+            if (t.klaar && t.klaarOp) o.klaarOp = t.klaarOp;
+            if (t.doel) o.doel = t.doel;
+            return o;
+          }),
+        };
+      }).filter(function (f) { return f.naam || f.tussendoelen.length; }),
+      bijgewerkt: clockNow().toISOString(),
+    };
+    if (old.bron) body.bron = old.bron;
+    S.visie = body; S.visieDraft = null; S.visieFase = null;
+    queueWrite("instellingen/visie", body, 0);
+    renderVisie(); renderOvVisie(); renderOvKoers();
+    toast("Toekomst opgeslagen.");
+    window.scrollTo(0, 0);
   }
 
   /* ================= Render: doelen ================= */
@@ -729,57 +1180,110 @@
     if (!S.db) { list.append(emptyBox(S.status === "loading" ? "Doelen laden…" : "Je doelen konden niet worden geladen.")); return; }
     if (!S.loaded.doelen) { list.append(emptyBox("Doelen laden…")); return; }
     if (!gs.length && S.editing !== "__new") list.append(emptyBox("Nog geen doelen. Begin met het doel dat dit jaar het meeste verschil maakt."));
-    gs.forEach(function (g) { list.append(S.editing === g.id ? goalForm() : goalCard(g)); });
+    if (gs.length) {
+      // Eén rustige lijst: per doel een regel met streefdatum, volgende mijlpaal en uitvoering. Open een doel voor de rest.
+      var led = h("div", { class: "gl" });
+      led.append(h("div", { class: "gl-cols", "aria-hidden": "true" }, h("span", { text: "Doel" }), h("span", { text: "Laatste 4 weken" })));
+      gs.forEach(function (g) { led.append(S.editing === g.id ? goalForm() : goalRow(g)); });
+      list.append(led);
+    }
     if (S.editing === "__new") list.append(goalForm());
-    if (S.view === "doelen") drawObCharts();
   }
-  function goalCard(g) {
-    var ms = (g.mijlpalen || []).filter(function (m) { return m && m.tekst; }), done = ms.filter(function (m) { return m.klaar; }).length;
-    var a4 = goalAvg4(g.id), writable = canWrite();
-    var acts = (g.acties || []).filter(function (a) { return a && a.tekst; });
+  // Openklappen past alleen de twee betrokken doelen aan, zodat de knop (en je focus) blijft staan.
+  function toggleGoal(id) {
+    var prev = S.openGoal;
+    S.openGoal = prev === id ? null : id;
+    if (prev && prev !== id) syncGoalItem(prev);
+    syncGoalItem(id);
+    var b = document.getElementById("gr-" + id);
+    if (b && S.openGoal) b.scrollIntoView({ block: "nearest" });
+  }
+  function syncGoalItem(gid) {
+    var item = document.getElementById("goal-" + gid), g = S.goals[gid];
+    if (!item || !g || !item.classList.contains("gl-item")) return;
+    var open = S.openGoal === gid, row = document.getElementById("gr-" + gid), det = document.getElementById("gd-" + gid);
+    item.classList.toggle("open", open);
+    if (row) row.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open && !det) item.append(goalDetail(Object.assign({ id: gid }, g), "gd-" + gid));
+    if (!open && det) det.remove();
+  }
+  // Eén regel per doel: categorie, titel, streefdatum, volgende mijlpaal en je uitvoering over de laatste 4 afgeronde weken.
+  function goalRow(g) {
+    var open = S.openGoal === g.id, did = "gd-" + g.id;
+    var a4 = goalAvg4(g.id), hasActs = (g.acties || []).some(function (a) { return a && a.tekst && Number(a.perWeek) > 0; });
     var dl = parseYmd(g.deadline), cd = dl ? countdown(dl) : null;
-    var kort = String(g.kort || "").trim();
-    var obWeeks = clamp(Math.round((thisMonday().getTime() - trackStart()) / (7 * 864e5)) + 1, 6, 12);
-    return h("article", { class: "g-card", id: "goal-" + g.id },
-      h("div", { class: "g-top" },
-        h("span", { class: "cat", text: g.categorie || "Doel" }),
-        g.concept ? h("span", { class: "tag-concept", text: "startversie" }) : null,
-        cd ? h("span", { class: "og-hz" + (cd.over ? " over" : ""), title: "Streefdatum " + longDate(dl) }, icon("flag"), h("span", { text: monthYear(dl) + " · " + cd.text })) : null,
-        a4 != null ? h("span", { class: "g-avg", title: "Gemiddelde uitvoering over je laatste 4 afgeronde weken, maximaal 100% per week", text: pct(a4) + " · laatste 4 wk" }) : null),
-      h("h3", { class: "g-title", text: g.titel || "Naamloos doel" }),
-      kort ? h("p", { class: "og-why g-kort", text: kort }) : null,
-      g.waarom ? h("div", { class: "g-why" }, h("span", { class: "label", text: "Waarom dit je verder brengt" }), h("p", { text: g.waarom })) : null,
-      h("dl", { class: "g-meta" },
-        h("div", null, h("dt", { text: "Resultaat" }), h("dd", { text: g.resultaat || "Nog niet vastgelegd" })),
-        h("div", null, h("dt", { text: "Streefdatum" }), h("dd", null, dl ? longDate(dl) : "Geen", cd ? h("span", { class: "dd-sub" + (cd.over ? " over" : ""), text: cd.text }) : null))),
-      acts.length ? h("div", { class: "g-acts" },
-        h("div", { class: "g-acts-head" }, h("span", { class: "label", text: "Elke week · opbouw per week" }),
-          h("div", { class: "legend", "aria-hidden": "true" },
-            h("span", null, h("i", { class: "sw", style: "background:var(--s1)" }), "gedaan"),
-            acts.some(function (a) { return !unitOf(a); }) ? h("span", null, h("i", { class: "ln", style: "background:var(--ink)" }), "plan") : null)),
-        h("ul", { class: "g-list-ul g-act-list" }, acts.map(function (a) {
-          var unit = unitOf(a), tr = actionTrend(a.id, unit, Number(a.perWeek) || 0), nd = writable ? nudgeFor(a) : null, guide = unit ? amountGuide(a) : null;
-          return h("li", { class: "g-act" },
-            h("div", { class: "g-act-top" }, h("span", { class: "g-act-t", text: a.tekst }), h("span", { class: "x", text: (Number(a.perWeek) || 0) + "× per week" + (unit ? " · in " + unit : "") })),
-            h("div", { class: "ob" },
-              h("div", { class: "ob-chart", "data-aid": a.id, "data-unit": unit, "data-label": a.tekst, "data-weeks": obWeeks }),
-              h("div", { class: "ob-side" }, trendChip(tr),
-                tr.from != null ? h("span", { class: "oa-note", text: "trend ~" + fmtAmount(tr.from) + " → ~" + fmtAmount(tr.to) + (unit ? " " + unit : "× per week") }) : null,
-                guide ? h("span", { class: "oa-note", text: "vorige week " + fmtAmount(guide.last) + " " + unit + ", volgende stap ~" + fmtAmount(guide.next) + " " + unit + " (+10%)" }) : null)),
-            nd ? nudgeBox(g, a, nd) : null);
-        })),
-        obTable(acts, obWeeks)) : null,
-      ms.length ? h("div", { class: "g-ms" }, h("span", { class: "label", text: "Mijlpalen " + done + "/" + ms.length }),
-        h("ul", { class: "g-list-ul" }, ms.map(function (m) {
-          var md = parseYmd(m.datum), mc = md && !m.klaar ? countdown(md) : null;
-          return h("li", null, h("label", null,
-            h("input", { type: "checkbox", id: "ms-" + g.id + "-" + m.id, checked: !!m.klaar, disabled: !writable, onchange: function (e) { toggleMs(g.id, m.id, e.target.checked); } }),
-            h("span", { class: "ms-t", text: m.tekst }),
-            md ? h("span", { class: "ms-d" + (mc && mc.over ? " over" : ""), text: dateShortY(md) + (mc ? " · " + mc.text : "") }) : null));
-        }))) : null,
-      h("div", { class: "g-foot" },
-        writable ? h("button", { class: "btn ghost sm", type: "button", text: "Bewerken", onclick: function () { startEdit(g.id); } }) : null,
-        S.sparOn ? h("button", { class: "link-btn", type: "button", text: "Spar over dit doel", onclick: function () { sparAbout('Help me met mijn doel "' + (g.titel || "") + '". '); } }) : null));
+    var ms = (g.mijlpalen || []).filter(function (m) { return m && m.tekst; }), nx = openMilestones(g)[0];
+    // Twee vaste regels onder de titel: de streefdatum (vlag) en de volgende mijlpaal (ruit), dezelfde tekens als op de tijdlijn.
+    var meta = h("span", { class: "gl-meta" },
+      dl ? h("span", { class: "gl-dl" + (cd.over ? " over" : ""), title: "Streefdatum " + longDate(dl) }, icon("flag"), h("span", { text: monthYear(dl) + ", " + cd.text }))
+        : h("span", { class: "gl-dl none" }, icon("flag"), h("span", { text: "geen streefdatum" })),
+      nx ? h("span", { class: "gl-nx", title: "Volgende mijlpaal" + (nx.d ? ", " + longDate(nx.d) : "") }, icon("step"),
+          h("span", { class: "gl-nx-t" }, nx.d ? h("span", { class: "gl-nx-d", text: dateShortY(nx.d) }) : null, nx.m.tekst))
+        : ms.length ? h("span", { class: "gl-nx done" }, icon("step"), h("span", { class: "gl-nx-t", text: "alle mijlpalen gehaald" })) : null);
+    var statText = a4 != null ? pct(a4) : hasActs ? "nieuw" : "–";
+    var stat = h("span", { class: "gl-stat", title: a4 != null ? "Gemiddelde uitvoering over je laatste 4 afgeronde weken, maximaal 100% per week" : hasActs ? "Na je eerste afgeronde week zie je hier je uitvoering" : "Nog geen wekelijkse acties" },
+      h("span", { class: "gl-pct" + (a4 == null ? " none" : ""), text: statText }),
+      h("span", { class: "meter gl-meter" }, h("span", { style: "width:" + (a4 == null ? 0 : clamp(a4, 0, 100)).toFixed(1) + "%" })));
+    var row = h("button", { type: "button", class: "gl-row", id: "gr-" + g.id, "aria-expanded": open ? "true" : "false", "aria-controls": did, onclick: function () { toggleGoal(g.id); } },
+      h("span", { class: "gl-cat", text: g.categorie || "Doel" }),
+      h("span", { class: "gl-main" }, h("span", { class: "gl-title", text: g.titel || "Naamloos doel" }), meta),
+      stat,
+      h("span", { class: "gl-chev" }, icon("chev")));
+    var item = h("article", { class: "gl-item" + (open ? " open" : ""), id: "goal-" + g.id }, h("h3", { class: "gl-h" }, row));
+    if (open) item.append(goalDetail(g, did));
+    return item;
+  }
+  function goalDetail(g, did) {
+    var writable = canWrite();
+    var box = h("div", { class: "gd", id: did, role: "region", "aria-labelledby": "gr-" + g.id });
+    // Waarom: je zin van één regel vooraan, de rest van je uitleg eronder (zonder die zin te herhalen).
+    var waarom = String(g.waarom || "").trim().replace(/\s+/g, " "), kort = String(g.kort || "").trim();
+    var lead = kort || firstSentence(waarom, 400), more = waarom;
+    var leadCore = lead.replace(/…$/, "");
+    if (leadCore && more.indexOf(leadCore) === 0) more = more.slice(leadCore.length).trim();
+    if (lead) box.append(h("div", { class: "gd-why" }, h("p", { class: "gd-lead", text: lead }), more ? h("p", { class: "gd-more", text: more }) : null));
+    else if (writable) box.append(h("p", { class: "gd-why gd-empty" }, h("button", { type: "button", class: "link-btn", text: "Waarom doe je dit? Leg het vast in één zin", onclick: function () { editGoalField(g.id, "kort"); } })));
+    if (String(g.resultaat || "").trim()) box.append(h("p", { class: "gd-res" }, h("span", { class: "gd-k", text: "Resultaat" }), h("span", { text: g.resultaat })));
+
+    var acts = (g.acties || []).filter(function (a) { return a && a.tekst; });
+    var sec = h("section", { class: "gd-sec", "aria-label": "Elke week" }, h("h4", { class: "gd-h", text: "Elke week" }));
+    if (acts.length) {
+      var weeks = clamp(Math.round((thisMonday().getTime() - trackStart()) / (7 * 864e5)) + 1, 6, 12);
+      sec.append(h("ul", { class: "gd-acts" }, acts.map(function (a) {
+        var unit = unitOf(a), plan = Number(a.perWeek) || 0, tr = actionTrend(a.id, unit, plan);
+        var guide = unit ? amountGuide(a) : null, nd = writable ? nudgeFor(a) : null;
+        return h("li", { class: "gd-act" },
+          h("div", { class: "gd-act-top" },
+            h("span", { class: "gd-act-t", text: a.tekst }),
+            h("span", { class: "gd-act-plan", text: plan + "× per week" + (unit ? ", in " + unit : "") })),
+          h("div", { class: "gd-act-ob" }, sparkSvg(actionSeries(a.id, 8, unit), unit, a.tekst, { bw: 10, H: 34 }), trendChip(tr),
+            guide ? h("span", { class: "oa-note", text: "vorige week " + fmtAmount(guide.last) + " " + unit + ", volgende stap ~" + fmtAmount(guide.next) + " " + unit }) : null),
+          nd ? nudgeBox(g, a, nd) : null);
+      })), obTable(acts, weeks));
+    } else sec.append(h("p", { class: "hint", text: "Nog geen wekelijkse acties. Voeg ze toe met Bewerken; die vink je elke week af op Overzicht." }));
+    box.append(sec);
+
+    var ms = (g.mijlpalen || []).filter(function (m) { return m && m.tekst; });
+    var done = ms.filter(function (m) { return m.klaar; }).length;
+    var msSec = h("section", { class: "gd-sec", "aria-label": "Mijlpalen" }, h("h4", { class: "gd-h" }, "Mijlpalen", ms.length ? h("span", { class: "gd-count", text: done + " van " + ms.length + " gehaald" }) : null));
+    if (ms.length) {
+      // Open mijlpalen op datum, gehaalde onderaan.
+      var order = openMilestones(g).map(function (x) { return x.m; }).concat(ms.filter(function (m) { return m.klaar; }));
+      msSec.append(h("ul", { class: "gd-ms" }, order.map(function (m) {
+        var md = parseYmd(m.datum), mc = md && !m.klaar ? countdown(md) : null, ko = m.klaar && parseYmd(m.klaarOp);
+        return h("li", { class: m.klaar ? "done" : "" }, h("label", null,
+          h("input", { type: "checkbox", id: "ms-" + g.id + "-" + m.id, checked: !!m.klaar, disabled: !writable, onchange: function (e) { toggleMs(g.id, m.id, e.target.checked); } }),
+          h("span", { class: "ms-t", text: m.tekst }),
+          m.klaar ? h("span", { class: "ms-d", text: ko ? "gehaald " + dateShortY(ko) : "gehaald" })
+            : md ? h("span", { class: "ms-d" + (mc && mc.over ? " over" : ""), text: dateShortY(md) + ", " + mc.text }) : null));
+      })));
+    } else msSec.append(h("p", { class: "hint", text: "Nog geen mijlpalen. Tussenstappen met een datum laten zien of je op schema ligt." }));
+    box.append(msSec);
+
+    box.append(h("div", { class: "gd-foot" },
+      writable ? h("button", { class: "btn ghost sm", type: "button", text: "Bewerken", onclick: function () { startEdit(g.id); } }) : null,
+      S.sparOn ? h("button", { class: "link-btn", type: "button", text: "Spar over dit doel", onclick: function () { sparAbout('Help me met mijn doel "' + (g.titel || "") + '". '); } }) : null));
+    return box;
   }
   function obTable(acts, n) {
     var cols = acts.map(function (a) { return { a: a, unit: unitOf(a), ser: actionSeries(a.id, n, unitOf(a)) }; });
@@ -793,49 +1297,10 @@
           return h("td", { class: "n", text: p.v == null ? "–" : c.unit ? fmtAmount(p.v) + " " + c.unit + (p.gedaan != null ? " (" + p.gedaan + "×)" : "") : p.v + "/" + (p.target || 0) });
         })));
     }
-    return h("details", { class: "tbl" }, h("summary", { text: "Toon opbouw als tabel" }),
+    return h("details", { class: "tbl" }, h("summary", { text: "Opbouw per week als tabel" }),
       h("div", { class: "tbl-wrap" }, h("table", null,
         h("thead", null, h("tr", null, h("th", { text: "Week" }), h("th", { text: "Datum" }), cols.map(function (c) { return h("th", { text: cut(c.a.tekst, 28) }); }))),
         h("tbody", null, rows))));
-  }
-  // Grotere opbouwgrafiek op de doelkaart; wordt getekend zodra de kaart in de pagina staat en zijn breedte kent.
-  function drawObCharts() {
-    Array.prototype.forEach.call(document.querySelectorAll("#g-list .ob-chart"), function (box) {
-      var W = Math.floor(box.clientWidth); if (!W) return;
-      var unit = box.dataset.unit || "", label = box.dataset.label || "", n = Number(box.dataset.weeks) || 12;
-      box.replaceChildren(obChart(actionSeries(box.dataset.aid, n, unit), unit, label, Math.max(220, W)));
-    });
-  }
-  function obChart(ser, unit, label, W) {
-    var H = 92, m = { l: 30, r: 4, t: 10, b: 20 }, pw = W - m.l - m.r, ph = H - m.t - m.b;
-    var n = ser.length, slot = pw / n, bw = clamp(slot - 6, 3, 24);
-    var max = 0;
-    ser.forEach(function (p) { if (p.v != null) max = Math.max(max, p.v); if (!unit && p.target) max = Math.max(max, p.target); });
-    var top = max <= 0 ? 1 : max <= 4 ? Math.ceil(max) : max <= 10 ? Math.ceil(max / 2) * 2 : Math.ceil(max / 5) * 5;
-    function y(v) { return m.t + ph * (1 - v / top); }
-    function cx(i) { return m.l + slot * i + slot / 2; }
-    var svg = sv("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": label + ", opbouw per week. " + seriesLabel(ser, unit) + ". De tabel onder de kaart toont dezelfde waarden." });
-    [0, top].forEach(function (v, k) {
-      svg.append(sv("line", { x1: m.l, x2: W - m.r, y1: y(v), y2: y(v), class: k === 0 ? "c-base" : "c-grid" }));
-      svg.append(sv("text", { x: m.l - 6, y: y(v) + 3.5, class: "c-tick", "text-anchor": "end" }, unit ? fmtAmount(v) : String(v)));
-    });
-    ser.forEach(function (p, i) {
-      var x = cx(i) - bw / 2, cls = "c-bar" + (p.state === "current" ? " cur" : "");
-      if (p.v == null) { if (p.state === "past") svg.append(sv("rect", { x: x, y: y(0) - 3, width: bw, height: 3, class: "c-none" })); }
-      else if (p.v <= 0) svg.append(sv("rect", { x: x, y: y(0) - 1.5, width: bw, height: 1.5, class: cls }));
-      else svg.append(sv("path", { d: topRounded(x, y(Math.min(p.v, top)), bw, y(0) - y(Math.min(p.v, top)), 4), class: cls }));
-      if (!unit && p.target && p.v != null) svg.append(sv("line", { x1: x - 3, x2: x + bw + 3, y1: y(p.target), y2: y(p.target), class: "c-tgt" }));
-    });
-    svg.append(sv("text", { x: cx(0), y: H - 5, class: "c-tick", "text-anchor": "middle" }, "wk " + isoWeek(ser[0].mon).week));
-    var mid = Math.floor(n / 2);
-    if (slot * mid > 60) svg.append(sv("text", { x: cx(mid), y: H - 5, class: "c-tick", "text-anchor": "middle" }, "wk " + isoWeek(ser[mid].mon).week));
-    svg.append(sv("text", { x: cx(n - 1), y: H - 5, class: "c-tick", "text-anchor": "middle" }, "nu"));
-    ser.forEach(function (p, i) {
-      var hit = sv("rect", { x: m.l + slot * i, y: 0, width: slot, height: H, fill: "transparent" });
-      bindTip(hit, function () { return actTipRows(p, unit, ""); });
-      svg.append(hit);
-    });
-    return svg;
   }
   function startEdit(id) {
     var g = S.goals[id]; if (!g) return;
@@ -938,7 +1403,7 @@
       }),
       volgorde: old.volgorde != null ? old.volgorde : nextOrder(),
       concept: false,
-      bijgewerkt: new Date().toISOString()
+      bijgewerkt: clockNow().toISOString()
     };
     S.goals[d.id] = body;
     queueWrite("doelen/" + d.id, body, 0);
@@ -961,13 +1426,15 @@
     (b.mijlpalen || []).forEach(function (m) {
       if (m.id !== mid) return;
       m.klaar = !!val;
-      if (val) m.klaarOp = ymd(new Date()); else delete m.klaarOp;
+      if (val) m.klaarOp = ymd(clockNow()); else delete m.klaarOp;
     });
     S.goals[gid] = b;
     queueWrite("doelen/" + gid, b, 200);
     renderGoals();
     renderOverview();
     renderOvKoers();
+    var cb = document.getElementById("ms-" + gid + "-" + mid);
+    if (cb && S.view === "doelen") cb.focus({ preventScroll: true });
   }
 
   /* ---------- Koers: je doelen op een tijdlijn naar de toekomst ---------- */
@@ -1024,7 +1491,7 @@
     var tMax = t0 + 182 * 864e5;
     rows.forEach(function (r) { if (r.dl) tMax = Math.max(tMax, r.dl.getTime()); r.ms.forEach(function (x) { if (x.d) tMax = Math.max(tMax, x.d.getTime()); }); });
     var span = tMax - t0, tStart = t0 - span * 0.045, tEnd = tMax + span * 0.01;
-    var labelW = narrow ? 0 : Math.min(250, Math.round(W * 0.27)), x0 = narrow ? 6 : labelW + 18, x1 = W - (narrow ? 64 : 76);
+    var labelW = narrow ? 0 : Math.min(250, Math.round(W * 0.27)), x0 = narrow ? 6 : labelW + 18, x1 = W - (narrow ? 70 : 76);
     function X(t) { return x0 + (x1 - x0) * (clamp(t, tStart, tEnd) - tStart) / (tEnd - tStart); }
     var axisH = 28, laneH = narrow ? 62 : 52, H = axisH + rows.length * laneH + 4;
     var svg = sv("svg", { viewBox: "0 0 " + W + " " + H, class: "koers-svg", role: "group", "aria-label": "Tijdlijn van je doelen, van nu tot " + monthYear(new Date(tMax)) + ". De lijst eronder toont dezelfde data." });
@@ -1054,7 +1521,11 @@
         var xd = X(r.dl.getTime());
         svg.append(sv("line", { x1: Math.min(xNow, xd), x2: Math.max(xNow, xd), y1: cy, y2: cy, class: "k-track" }));
       } else {
-        svg.append(sv("text", { x: xNow + 10, y: cy + 4, class: "k-sub" }, narrow ? "geen streefdatum" : "zet een streefdatum bij Bewerken"));
+        // Geen streefdatum: een stippellijn tot de laatste mijlpaal, of (zonder gedateerde mijlpalen) een korte melding.
+        var lastMs = 0;
+        r.ms.forEach(function (x) { if (x.d) lastMs = Math.max(lastMs, x.d.getTime()); });
+        if (lastMs) svg.append(sv("line", { x1: xNow, x2: X(lastMs), y1: cy, y2: cy, class: "k-track open" }));
+        else if (narrow) svg.append(sv("text", { x: xNow + 10, y: cy + 4, class: "k-sub" }, "geen streefdatum"));
       }
       r.ms.forEach(function (x) {
         if (!x.d) return;
@@ -1071,7 +1542,9 @@
         var xd2 = X(r.dl.getTime()), lab = monthYear(r.dl), right = xd2 + 12 + lab.length * 6.8 <= W;
         svg.append(sv("circle", { cx: xd2, cy: cy, r: 8, class: "k-ring" }));
         svg.append(sv("circle", { cx: xd2, cy: cy, r: 6, class: "k-dl" + (cd && cd.over ? " over" : "") }));
-        svg.append(sv("text", { x: right ? xd2 + 12 : xd2 - 12, y: cy + 4, class: "k-dlt", "text-anchor": right ? "start" : "end" }, lab));
+        // Past de datum niet rechts van de stip, dan erboven in plaats van over de lijn heen.
+        svg.append(right ? sv("text", { x: xd2 + 12, y: cy + 4, class: "k-dlt" }, lab)
+          : sv("text", { x: Math.min(W, xd2 + 8), y: cy - 12, class: "k-dlt", "text-anchor": "end" }, lab));
         var hitD = sv("circle", { cx: xd2, cy: cy, r: 13, class: "k-hit", tabindex: "0", role: "img", "aria-label": "Streefdatum " + (r.g.titel || "") + ": " + longDate(r.dl) + ", " + cd.text });
         bindTip(hitD, function () { return koersTip(r, "dl"); });
         svg.append(hitD);
@@ -1092,11 +1565,15 @@
   }
   // Overzicht: wat eraan komt (mijlpalen met een datum en streefdata), zodat je weekwerk een richting heeft.
   function upcomingKoers(n) {
-    var out = [], t = dayNum(new Date());
+    var out = [], t = dayNum(clockNow());
     goalsSorted().forEach(function (g) {
       openMilestones(g).forEach(function (x) { if (x.d) out.push({ d: x.d, text: x.m.tekst, g: g, kind: "ms" }); });
       var dl = parseYmd(g.deadline);
       if (dl && dayNum(dl) >= t - 31) out.push({ d: dl, text: g.resultaat ? cut(g.resultaat, 90) : g.titel, g: g, kind: "dl" });
+    });
+    var v = vis();
+    if (v) (v.fasen || []).forEach(function (f) {
+      tdList(f).forEach(function (x) { var d = parseYmd(x.datum); if (!x.klaar && d) out.push({ d: d, text: cut(x.tekst, 80), g: { titel: gebiedNaam(v, x.gebied) || f.naam || "" }, kind: "td" }); });
     });
     out.sort(function (a, b) { return a.d - b.d; });
     return out.slice(0, n);
@@ -1113,9 +1590,9 @@
     box.append(h("ul", { class: "cal-list" }, list.map(function (x) {
       var cd = countdown(x.d);
       return h("li", { class: "cal" + (cd.over ? " over" : "") },
-        h("div", { class: "cal-date", "aria-hidden": "true" }, h("span", { class: "cal-day", text: String(x.d.getDate()) }), h("span", { class: "cal-mon", text: MONTHS[x.d.getMonth()] + (x.d.getFullYear() !== new Date().getFullYear() ? " '" + String(x.d.getFullYear()).slice(2) : "") })),
+        h("div", { class: "cal-date", "aria-hidden": "true" }, h("span", { class: "cal-day", text: String(x.d.getDate()) }), h("span", { class: "cal-mon", text: MONTHS[x.d.getMonth()] + (x.d.getFullYear() !== clockNow().getFullYear() ? " '" + String(x.d.getFullYear()).slice(2) : "") })),
         h("div", { class: "cal-body" },
-          h("div", { class: "cal-top" }, h("span", { class: "cal-kind", text: x.kind === "dl" ? "Streefdatum" : "Mijlpaal" }), h("span", { class: "cal-cd" + (cd.over ? " over" : ""), text: cd.text })),
+          h("div", { class: "cal-top" }, h("span", { class: "cal-kind", text: x.kind === "dl" ? "Streefdatum" : x.kind === "td" ? "Tussendoel" : "Mijlpaal" }), h("span", { class: "cal-cd" + (cd.over ? " over" : ""), text: cd.text })),
           h("strong", { class: "cal-what", text: x.text }),
           h("span", { class: "cal-meta", text: x.g.titel || "" })));
     })));
@@ -1145,7 +1622,7 @@
   async function addNote(text, soort, doel) {
     if (!canWrite()) { toast("Opslaan kan alleen als eigenaar."); return; }
     text = String(text || "").trim(); if (!text) return;
-    var id = rid("n"), body = { tekst: text.slice(0, 4000), soort: soort || "notitie", doel: doel || null, datum: new Date().toISOString() };
+    var id = rid("n"), body = { tekst: text.slice(0, 4000), soort: soort || "notitie", doel: doel || null, datum: clockNow().toISOString() };
     S.notes.unshift(Object.assign({ id: id }, body));
     renderNotes(); renderMarketLog();
     try { await S.db.doc("notities/" + id).set(body); } catch (e) { writeError(e); }
@@ -1159,7 +1636,7 @@
   /* ================= Sparren met Claude ================= */
   var SUGS = [
     "Waar moet ik deze week voorrang aan geven?",
-    "Zijn mijn doelen realistisch voor één jaar?",
+    "Passen mijn doelen bij mijn visie en de fase waarin ik zit?",
     "Wat betekent mijn handelsplan voor deze week?",
     "Ik loop achter. Wat stuur ik bij?"
   ];
@@ -1188,6 +1665,7 @@
       "Antwoord in het Nederlands, direct en concreet, als een eerlijke coach die meedenkt. Geen algemene motivatieteksten en geen lange lijsten met tips. Houd het kort, meestal onder de 150 woorden, tenzij hij om meer vraagt. Stel hooguit één vraag terug.",
       "Baseer je op de gegevens hieronder. Zeg eerlijk als iets onrealistisch is, als hij te veel tegelijk wil, of als een doel niet meetbaar is.",
       "Hij wil progressief opbouwen (progressive overload): geleidelijk meer doen. Extra keren boven zijn plan tellen niet mee in de weekscore (die is per doel maximaal 100%) maar wel in zijn opbouw. Help hem met kleine stappen: één keer per week erbij als hij de lat een paar weken haalt of overschrijdt, en bij hoeveelheden (km, minuten) ongeveer 10% per week. Koppel wat hij elke week doet aan waarom hij het doet en aan zijn streefdata.",
+      "Hij heeft een toekomstvisie: wie hij over een paar jaar is, waarom hij dat wil, hoe hij er komt, hoe zijn leven er per gebied uitziet (zoals werk, geld en wonen), hoe hij nu en later zijn geld verdient, en een pad in fasen met tussendoelen per gebied. Verbind je adviezen daaraan: helpt dit hem bij de volgende stap in zijn huidige fase, en past het bij zijn redenen? Wijs het eerlijk aan als zijn doelen of acties niet bij die visie passen, of als een gebied achterblijft.",
       "Over beleggen: zijn handelsplan komt uit zijn eigen Handelsplan-site en staat hieronder samengevat. Help hem consequent volgens zijn eigen plan, niveaus en spelregels te handelen. Geef geen persoonlijk koop- of verkoopadvies en geen koersvoorspellingen. De marktcijfers zijn momentopnames met een datum, geen live koersen; zeg dat als hij ernaar vraagt.",
       S.toolsOk
         ? "Als een concrete wijziging helpt (een doel scherper formuleren, een wekelijkse actie aanpassen, een nieuw doel, of iets vastleggen in het logboek), stel die dan voor met de tools, hooguit drie per antwoord. Hij beslist zelf of hij ze toepast. Noem in je tekst kort wat je voorstelt. Gebruik de doel_id's en actie_id's uit de gegevens."
@@ -1195,10 +1673,36 @@
     ].join("\n");
   }
   function buildContext() {
-    var now = new Date(), curMon = thisMonday(), ws = yearWeeks();
+    var now = clockNow(), curMon = thisMonday(), ws = yearWeeks();
     var L = [sparRules(), "", "=== GEGEVENS UIT HET DASHBOARD ==="];
     L.push("Vandaag: " + DAYS[now.getDay()] + " " + now.getDate() + " " + MONTHS_LONG[now.getMonth()] + " " + now.getFullYear() + ", week " + isoWeek(curMon).week + ".");
     L.push("Het dashboardjaar loopt van " + longDate(ws[0]) + " tot en met " + longDate(addDays(ws[51], 6)) + ". Score per week = gemiddeld percentage afgevinkte acties over de doelen; 60% of meer telt als op koers.");
+    var vv = vis();
+    if (vv) {
+      L.push("", "TOEKOMSTVISIE (waar hij over " + (vv.horizon || "een paar jaar") + " wil staan; daar toetst hij zijn doelen aan):");
+      L.push("In één zin: " + visieZin(vv));
+      if (vv.rol) L.push("Rol waar hij naartoe werkt: " + vv.rol + (vv.specialisme ? ", gespecialiseerd in " + vv.specialisme : ""));
+      if (vv.kern) L.push("Toelichting: " + cut(vv.kern, 600));
+      if ((vv.themas || []).length) L.push("Waar hij in uitblinkt: " + vv.themas.join("; "));
+      if (vv.werkwijze) L.push("Werkwijze: " + cut(vv.werkwijze, 300));
+      if ((vv.waarom || []).length) L.push("Waarom hij dit wil: " + (vv.waaromIntro ? vv.waaromIntro + " " : "") + vv.waarom.join(" | "));
+      if ((vv.hoe || []).length) L.push("Hoe hij het bereikt: " + (vv.hoeIntro ? vv.hoeIntro + " " : "") + vv.hoe.join(" | "));
+      gebiedenOf(vv).forEach(function (g) {
+        L.push("Gebied " + g.naam + ": " + cut(g.beeld || "", 400) + ((g.hoe || []).length ? " Zo komt hij er: " + g.hoe.join("; ") : ""));
+      });
+      [["nu", "Zo verdient hij nu zijn geld: "], ["later", "Zo verdient hij later waarschijnlijk zijn geld: "]].forEach(function (k) {
+        var m = vv[k[0]] || {};
+        if (m.titel || m.tekst || (m.punten || []).length) L.push(k[1] + [m.titel, m.tekst].filter(Boolean).join(". ") + ((m.punten || []).length ? " (" + m.punten.join("; ") + ")" : ""));
+      });
+      var vpi = phaseNowIdx(vv);
+      (vv.fasen || []).forEach(function (f, i) {
+        L.push("Fase " + (i + 1) + (i === vpi ? " (hier zit hij nu)" : "") + ": " + (f.naam || "") + (phaseRange(f) ? " (" + phaseRange(f) + ")" : "") + (f.doel ? ". " + cut(f.doel, 400) : ""));
+        tdSorted(f).forEach(function (t) {
+          var gn = gebiedNaam(vv, t.gebied);
+          L.push("  - " + (t.klaar ? "[gehaald] " : t.datum ? "[open, voor " + t.datum + "] " : "[open] ") + (gn ? "(" + gn + ") " : "") + t.tekst);
+        });
+      });
+    }
     var idx = -1; ws.forEach(function (m, i) { if (m.getTime() === curMon.getTime()) idx = i; });
     var end = idx < 0 ? (curMon.getTime() > ws[51].getTime() ? 52 : 0) : idx + 1;
     var recent = ws.slice(Math.max(0, end - 8), end);
@@ -1357,11 +1861,11 @@
           if (p.eenheid != null) { if (p.eenheid) b.acties[i].eenheid = p.eenheid; else delete b.acties[i].eenheid; }
         }
       } else b.acties.push(Object.assign({ id: rid("a"), tekst: p.tekst, perWeek: p.perWeek }, p.eenheid ? { eenheid: p.eenheid } : {}));
-      b.concept = false; b.bijgewerkt = new Date().toISOString();
+      b.concept = false; b.bijgewerkt = clockNow().toISOString();
       S.goals[p.doel] = b; queueWrite("doelen/" + p.doel, b, 0);
     } else if (p.type === "nieuw") {
       id = rid("d");
-      b = { titel: p.titel, categorie: p.categorie || "", waarom: p.waarom || "", kort: p.kort || "", resultaat: p.resultaat || "", deadline: "", acties: (p.acties || []).map(function (a) { return Object.assign({ id: rid("a"), tekst: a.tekst, perWeek: a.perWeek }, a.eenheid ? { eenheid: a.eenheid } : {}); }), mijlpalen: [], volgorde: nextOrder(), concept: false, bijgewerkt: new Date().toISOString() };
+      b = { titel: p.titel, categorie: p.categorie || "", waarom: p.waarom || "", kort: p.kort || "", resultaat: p.resultaat || "", deadline: "", acties: (p.acties || []).map(function (a) { return Object.assign({ id: rid("a"), tekst: a.tekst, perWeek: a.perWeek }, a.eenheid ? { eenheid: a.eenheid } : {}); }), mijlpalen: [], volgorde: nextOrder(), concept: false, bijgewerkt: clockNow().toISOString() };
       S.goals[id] = b; queueWrite("doelen/" + id, b, 0);
     } else if (p.type === "notitie") {
       addNote(p.tekst, "inzicht", p.doel && S.goals[p.doel] ? p.doel : null);
@@ -1550,7 +2054,7 @@
   function savePortfolio() {
     var d = (S.pfDraft || []).filter(function (p) { return String(p.naam || "").trim(); });
     var posities = d.map(function (p) { return { id: p.id, naam: String(p.naam).trim().slice(0, 60), ticker: String(p.ticker || "").trim().slice(0, 12), soort: p.soort || "", waarde: toNum(p.waarde), inleg: toNum(p.inleg) }; });
-    var today = ymd(new Date());
+    var today = ymd(clockNow());
     var body = { posities: posities, bijgewerkt: today };
     S.invest.portfolio = body; queueWrite("invest/portfolio", body, 0);
     var total = posities.reduce(function (a, p) { return a + (p.waarde || 0); }, 0);
@@ -1579,7 +2083,7 @@
   }
   function renderDca() {
     var box = $("#months"); box.replaceChildren();
-    var inl = (S.invest.inleg || {}).maanden || {}, now = new Date(), nowK = now.getFullYear() + "-" + pad(now.getMonth() + 1);
+    var inl = (S.invest.inleg || {}).maanden || {}, now = clockNow(), nowK = now.getFullYear() + "-" + pad(now.getMonth() + 1);
     var months = yearMonths(), n = 0, w = canWrite();
     months.forEach(function (mk) {
       var on = !!inl[mk.key]; if (on) n++;
@@ -1697,7 +2201,7 @@
     return p ? (p.short || p.name) : id;
   }
   function upcoming(plan, n) {
-    var t = new Date(), today = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+    var t = clockNow(), today = new Date(t.getFullYear(), t.getMonth(), t.getDate());
     return (plan.calendar || []).map(function (c) { return Object.assign({ d: parseYmd(c.date) }, c); })
       .filter(function (c) { return c.d && c.d.getTime() >= today.getTime(); })
       .sort(function (a, b) { return a.d - b.d; }).slice(0, n);
@@ -1825,7 +2329,7 @@
     return card;
   }
   function hpCalendar(plan) {
-    var list = upcoming(plan, 6), t = new Date(), todayKey = ymd(t);
+    var list = upcoming(plan, 6), t = clockNow(), todayKey = ymd(t);
     var card = h("section", { class: "panel hp-cal" }, h("div", { class: "panel-head" }, h("h2", { text: "Komende momenten" })));
     if (!list.length) { card.append(h("p", { class: "hint", text: "Geen momenten gepland." })); return card; }
     card.append(h("ul", { class: "cal-list" }, list.map(function (c) {
@@ -1983,8 +2487,9 @@
     return "Laatste weken: " + (vals.length ? vals.join(", ") + "; " : "") + "deze week " + last;
   }
   // Kleine kolommengrafiek per actie: elke staaf is een week, het streepje je plan voor die week.
-  function sparkSvg(ser, unit, label) {
-    var n = ser.length, bw = 7, gap = 3, H = 28, top = 3, W = n * (bw + gap) - gap;
+  function sparkSvg(ser, unit, label, size) {
+    size = size || {};
+    var n = ser.length, bw = size.bw || 7, gap = 3, H = size.H || 28, top = 3, W = n * (bw + gap) - gap;
     var max = 0;
     ser.forEach(function (p) { if (p.v != null) max = Math.max(max, p.v); if (!unit && p.target) max = Math.max(max, p.target); });
     if (max <= 0) max = 1;
@@ -2153,7 +2658,8 @@
         var cell = h("button", { type: "button", class: cls, "aria-label": label, disabled: d.state === "future" },
           h("span", { class: "yw", text: "wk " + wk }), h("span", { class: "yv", text: d.state === "future" ? "" : d.score == null ? "–" : Math.round(d.score) + "%" }));
         if (d.state !== "future") {
-          cell.addEventListener("click", function () { hideTip(); S.selMon = d.mon; location.hash = "#overzicht"; });
+          // Deze week kiezen betekent: geen vaste week, zodat je na het weekend vanzelf in de nieuwe week staat.
+          cell.addEventListener("click", function () { hideTip(); S.selMon = weekState(d.mon) === "current" ? null : d.mon; location.hash = "#overzicht"; });
           cell.addEventListener("pointerenter", function (ev) { showTip(ev.clientX, ev.clientY, weekTipRows(d)); });
           cell.addEventListener("pointermove", function (ev) { showTip(ev.clientX, ev.clientY, weekTipRows(d)); });
           cell.addEventListener("pointerleave", hideTip);
@@ -2201,8 +2707,10 @@
   function renderAll(force) {
     renderHeader();
     renderOverview();
+    renderOvVisie();
     renderOvKoers();
     renderOvHp();
+    renderVisie();
     renderGoals(force);
     renderNotes();
     renderInvest();
@@ -2223,7 +2731,7 @@
     if (v === "overzicht") renderOverview();
     if (v === "jaar") renderYear();
     if (v === "investeren") renderHistChart();
-    if (v === "doelen") { renderKoers(); drawObCharts(); }
+    if (v === "doelen") renderKoers();
     if (changed) window.scrollTo(0, 0);
   }
 
@@ -2254,6 +2762,11 @@
     S.db.doc("instellingen/algemeen").onSnapshot(function (d) {
       if (!S.dirty.has("instellingen/algemeen")) S.settings = d.exists ? clone(d.data()) || {} : {};
       S.loaded.instellingen = true; renderAll();
+    }, err);
+    S.db.doc("instellingen/visie").onSnapshot(function (d) {
+      if (!S.dirty.has("instellingen/visie")) S.visie = d.exists ? clone(d.data()) || null : null;
+      if (!S.loaded.instellingen) return;
+      renderVisie(); renderOvVisie(); renderOvKoers();
     }, err);
   }
 
@@ -2293,7 +2806,7 @@
     window.addEventListener("hashchange", route);
     var rt;
     window.addEventListener("resize", function () {
-      clearTimeout(rt); rt = setTimeout(function () { if (S.view === "jaar") renderYearChart(yearSeries()); if (S.view === "investeren") renderHistChart(); if (S.view === "doelen") { renderKoers(); drawObCharts(); } }, 150);
+      clearTimeout(rt); rt = setTimeout(function () { if (S.view === "jaar") renderYearChart(yearSeries()); if (S.view === "investeren") renderHistChart(); if (S.view === "doelen") renderKoers(); }, 150);
     });
     window.addEventListener("scroll", hideTip, { passive: true });
   }
@@ -2394,7 +2907,14 @@
     S.owner = true;
     subscribe();
     try {
+      var t0 = Date.now();
       var cfg = await api("GET", "/api/config");
+      var t1 = Date.now();
+      // Wijkt de klok van dit apparaat meer dan 10 minuten af van de server, dan rekent Koersplan met de servertijd.
+      if (typeof cfg.nu === "number" && isFinite(cfg.nu)) {
+        var off = cfg.nu - (t0 + t1) / 2;
+        clockOffset = Math.abs(off) > 10 * 60e3 ? off : 0;
+      }
       S.sparOn = !!cfg.spar;
       S.toolsOk = S.sparOn;
       S.hpCfg = cfg.handelsplan || {};
@@ -2405,7 +2925,13 @@
     renderAll(true);
     setupSpar();
     setInterval(function () { if (document.visibilityState === "visible") refreshData(); }, 60000);
-    document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") refreshData(); });
+    var hiddenAt = 0;
+    document.addEventListener("visibilitychange", function () {
+      if (document.visibilityState !== "visible") { hiddenAt = Date.now(); return; }
+      // Kom je na een halfuur of langer terug, dan begin je weer bij deze week, ook als je eerder een oude week openzette.
+      if (S.selMon && hiddenAt && Date.now() - hiddenAt > 30 * 60e3) { S.selMon = null; renderOverview(); }
+      refreshData();
+    });
   }
   init();
 })();
