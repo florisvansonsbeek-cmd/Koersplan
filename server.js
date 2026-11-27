@@ -130,7 +130,7 @@ async function importDoelenIfNeeded() {
   }
 }
 
-/* Eenmalige import van je visie via de variabele VISIE_IMPORT (JSON: {"visie": {...}}). Vervangt instellingen/visie;
+/* Eenmalige import van je toekomst via de variabele VISIE_IMPORT (JSON: {"visie": {...}}). Vervangt instellingen/visie;
    de vorige versie komt als back-up in app_meta. Elke inhoud wordt maar één keer toegepast, dus wat je daarna in de
    app aanpast (tussendoelen afvinken, teksten bewerken) blijft staan. */
 async function importVisieIfNeeded() {
@@ -138,8 +138,9 @@ async function importVisieIfNeeded() {
   if (!raw) return;
   let visie;
   try { const j = JSON.parse(raw); visie = j && j.visie ? j.visie : j; } catch (e) { log("VISIE_IMPORT is geen geldige JSON:", e.message); return; }
-  if (!visie || typeof visie !== "object" || Array.isArray(visie) || typeof visie.rol !== "string" || !visie.rol.trim()) {
-    log("VISIE_IMPORT mist een visie met een rol"); return;
+  const heeft = (k) => typeof visie[k] === "string" && visie[k].trim() !== "";
+  if (!visie || typeof visie !== "object" || Array.isArray(visie) || !(heeft("rol") || heeft("zin"))) {
+    log("VISIE_IMPORT mist een visie met een zin of een rol"); return;
   }
   const key = "visie_import_" + crypto.createHash("sha256").update(raw).digest("hex").slice(0, 16);
   const done = await pool.query("SELECT 1 FROM app_meta WHERE sleutel = $1", [key]);
