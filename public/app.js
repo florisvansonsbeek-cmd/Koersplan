@@ -792,6 +792,8 @@
     return m ? { kop: m[1].replace(/:$/, ""), rest: m[2] } : { kop: "", rest: s };
   }
   var TELWOORD = ["Geen", "Eén", "Twee", "Drie", "Vier", "Vijf", "Zes", "Zeven", "Acht"];
+  // Bedragen niet over twee regels: "€ 300" krijgt een vaste spatie.
+  function nb(s) { return String(s == null ? "" : s).replace(/€ (?=\d)/g, "€\u00a0"); }
 
   function renderVisie() {
     var band = $("#visie-band"), body = $("#visie-body"); if (!band || !body) return;
@@ -864,10 +866,10 @@
             h("h3", { class: "gb-naam", id: "gb-" + g.id, tabindex: "-1", text: g.naam }),
             c.n ? h("p", { class: "gb-prog", text: c.done + " van " + c.n + " tussendoelen gehaald" }) : null),
           h("div", { class: "gb-main" },
-            g.beeld ? h("p", { class: "gb-beeld", text: g.beeld }) : null,
+            g.beeld ? h("p", { class: "gb-beeld", text: nb(g.beeld) }) : null,
             g.id === "werk" && (v.themas || []).length ? h("ul", { class: "gb-themas", "aria-label": "Waar je in uitblinkt" }, v.themas.map(function (t) { return h("li", { text: t }); })) : null,
             g.id === "werk" && v.werkwijze ? h("p", { class: "gb-werk", text: v.werkwijze }) : null,
-            hoe.length ? h("div", { class: "gb-hoe" }, h("h4", { class: "gb-k", text: "Zo kom je er" }), h("ul", null, hoe.map(function (t) { return h("li", { text: t }); }))) : null),
+            hoe.length ? h("div", { class: "gb-hoe" }, h("h4", { class: "gb-k", text: "Zo kom je er" }), h("ul", null, hoe.map(function (t) { return h("li", { text: nb(t) }); }))) : null),
           h("div", { class: "gb-next" },
             h("h4", { class: "gb-k", text: "Volgende stap" }),
             nx ? h("p", { class: "gb-nt", text: nx.t.tekst }) : h("p", { class: "gb-none", text: c.n ? "Alle tussendoelen gehaald." : "Nog geen tussendoel in dit gebied. Voeg er een toe met Toekomst bewerken." }),
@@ -880,9 +882,9 @@
       if (!m.titel && !m.tekst && !pts.length) return null;
       return h("section", { class: "panel geld geld-" + key, "aria-label": kop },
         h("h2", { class: "geld-h", text: kop }),
-        m.titel ? h("p", { class: "geld-titel", text: m.titel }) : null,
-        m.tekst ? h("p", { class: "geld-tekst", text: m.tekst }) : null,
-        pts.length ? h("ul", { class: "geld-punten" }, pts.map(function (p) { return h("li", { text: p }); })) : null);
+        m.titel ? h("p", { class: "geld-titel", text: nb(m.titel) }) : null,
+        m.tekst ? h("p", { class: "geld-tekst", text: nb(m.tekst) }) : null,
+        pts.length ? h("ul", { class: "geld-punten" }, pts.map(function (p) { return h("li", { text: nb(p) }); })) : null);
     }
     var a = kaart("nu", "Zo verdien je nu je geld"), b = kaart("later", "Zo verdien je later je geld");
     return a || b ? h("div", { class: "geld-grid" }, a, b) : null;
