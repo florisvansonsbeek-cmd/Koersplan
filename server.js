@@ -13,6 +13,8 @@
  *   HANDELSPLAN_URL    optioneel: adres van je Handelsplan-site, bijv. https://handelsplan.vsonsbeek.nl
  *   HANDELSPLAN_PASSWORD  optioneel: je Handelsplan-wachtwoord of -pincode; samen met de URL zet dit de koppeling aan
  *   HANDELSPLAN_SYNC_MINUTES  optioneel: hoe vaak het plan wordt opgehaald, standaard 30 (minimaal 5)
+ *   DOELEN_IMPORT      optioneel: JSON met doelen die één keer alle doelen vervangen (zie README)
+ *   VISIE_IMPORT       optioneel: JSON met je visie die één keer instellingen/visie zet (zie README)
  *
  * Railway zet zelf RAILWAY_ENVIRONMENT_NAME. Alleen in de omgeving "production" (of lokaal, zonder die variabele)
  * logt Koersplan in bij Handelsplan; een kopie van de omgeving heeft hetzelfde wachtwoord en zou anders extra
@@ -128,6 +130,43 @@ async function importDoelenIfNeeded() {
   }
 }
 
+/* Eenmalige import van je visie via de variabele VISIE_IMPORT (JSON: {"visie": {...}}). Vervangt instellingen/visie;
+   de vorige versie komt als back-up in app_meta. Elke inhoud wordt maar één keer toegepast, dus wat je daarna in de
+   app aanpast (tussendoelen afvinken, teksten bewerken) blijft staan. */
+async function importVisieIfNeeded() {
+  const raw = process.env.VISIE_IMPORT;
+  if (!raw) return;
+  let visie;
+  try { const j = JSON.parse(raw); visie = j && j.visie ? j.visie : j; } catch (e) { log("VISIE_IMPORT is geen geldige JSON:", e.message); return; }
+  if (!visie || typeof visie !== "object" || Array.isArray(visie) || typeof visie.rol !== "string" || !visie.rol.trim()) {
+    log("VISIE_IMPORT mist een visie met een rol"); return;
+  }
+  const key = "visie_import_" + crypto.createHash("sha256").update(raw).digest("hex").slice(0, 16);
+  const done = await pool.query("SELECT 1 FROM app_meta WHERE sleutel = $1", [key]);
+  if (done.rowCount) return;
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    const old = await c.query("SELECT data FROM instellingen WHERE id = 'visie'");
+    if (old.rowCount) {
+      await c.query("INSERT INTO app_meta (sleutel, waarde) VALUES ($1, $2) ON CONFLICT (sleutel) DO NOTHING",
+        ["visie_backup_" + new Date().toISOString(), JSON.stringify(old.rows[0].data)]);
+    }
+    const data = Object.assign({}, visie, { bijgewerkt: new Date().toISOString() });
+    await c.query(
+      `INSERT INTO instellingen (id, data, bijgewerkt) VALUES ('visie', $1::jsonb, now())
+       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data, bijgewerkt = now()`, [JSON.stringify(data)]);
+    await c.query("INSERT INTO app_meta (sleutel, waarde) VALUES ($1, $2)", [key, new Date().toISOString()]);
+    await c.query("COMMIT");
+    log("Visie geïmporteerd" + (old.rowCount ? " (vorige versie bewaard als back-up)" : ""));
+  } catch (e) {
+    await c.query("ROLLBACK").catch(() => {});
+    log("Visie importeren mislukt:", e.message);
+  } finally {
+    c.release();
+  }
+}
+
 async function seedIfNeeded() {
   const done = await pool.query("SELECT 1 FROM app_meta WHERE sleutel = 'startdata_geladen'");
   if (done.rowCount) return;
@@ -178,6 +217,7 @@ function initDb() {
         await loadSessionKey();
         await seedIfNeeded();
         await importDoelenIfNeeded();
+        await importVisieIfNeeded();
         await hpLoadDevice();
         dbReady = true;
         dbError = "";

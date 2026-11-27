@@ -133,6 +133,8 @@
       svg.append(sv("path", { d: "M4 14.5V2.2M4 2.6h8.3l-1.9 2.9 1.9 2.9H4", stroke: "currentColor", "stroke-width": 1.6, "stroke-linecap": "round", "stroke-linejoin": "round" }));
     } else if (kind === "step") {
       svg.append(sv("path", { d: "M8 1.8 14.2 8 8 14.2 1.8 8z", stroke: "currentColor", "stroke-width": 1.6, "stroke-linejoin": "round" }));
+    } else if (kind === "check") {
+      svg.append(sv("path", { d: "M3.6 8.4 6.6 11.3 12.4 5", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" }));
     } else if (kind === "chev") {
       svg.append(sv("path", { d: "M4.3 6.2 8 9.9l3.7-3.7", stroke: "currentColor", "stroke-width": 1.8, "stroke-linecap": "round", "stroke-linejoin": "round" }));
     } else {
@@ -172,6 +174,7 @@
     db: null, user: null, owner: null, sparOn: false,
     status: "loading",
     settings: {}, goals: {}, weeks: {}, notes: [], invest: {}, hp: {}, hpCfg: {},
+    visie: null, visieDraft: null, visieFase: null,
     dirty: new Set(), deleted: new Set(),
     loaded: { doelen: false, weken: false, notities: false, invest: false, instellingen: false, handelsplan: false },
     view: "overzicht", selMon: null,
@@ -733,6 +736,292 @@
     $("#ov-reflect-state").textContent = "Opgeslagen";
   }
 
+  /* ================= Visie: wie je wordt, hoe je je geld verdient en het pad ernaartoe ================= */
+  // Staat in instellingen/visie. Een fase heeft een periode (JJJJ-MM) en tussendoelen met een datum die je afvinkt.
+  function vis() { var v = S.visie; return v && String(v.rol || "").trim() ? v : null; }
+  function lcFirst(s) { s = String(s || "").trim(); return /^[A-Z][a-z]/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s; }
+  function ymDate(s) { var m = /^(\d{4})-(\d{2})/.exec(String(s || "")); return m ? new Date(+m[1], +m[2] - 1, 1) : null; }
+  function ymText(s) { var d = ymDate(s); return d ? MONTHS[d.getMonth()] + " " + d.getFullYear() : ""; }
+  function phaseRange(f) { var a = ymText(f.van), b = ymText(f.tot); return a && b ? a + " – " + b : a ? "vanaf " + a : b ? "tot " + b : ""; }
+  // De fase waarin je nu zit: de eerste die nog niet voorbij is ('tot' telt de hele maand mee).
+  function phaseNowIdx(v) {
+    var fs = v.fasen || [], t = clockNow().getTime();
+    for (var i = 0; i < fs.length; i++) {
+      var e = ymDate(fs[i].tot);
+      if (!e || new Date(e.getFullYear(), e.getMonth() + 1, 1).getTime() > t) return i;
+    }
+    return Math.max(0, fs.length - 1);
+  }
+  function tdList(f) { return (f.tussendoelen || []).filter(function (x) { return x && String(x.tekst || "").trim(); }); }
+  // Open tussendoelen op datum (zonder datum achteraan), gehaalde onderaan.
+  function tdSorted(f) {
+    var all = tdList(f);
+    var open = all.filter(function (x) { return !x.klaar; }), done = all.filter(function (x) { return x.klaar; });
+    open.sort(function (a, b) { var da = parseYmd(a.datum), db = parseYmd(b.datum); return (da ? da.getTime() : 9e15) - (db ? db.getTime() : 9e15); });
+    return open.concat(done);
+  }
+  function nextTd(v) {
+    var fs = v.fasen || [];
+    for (var i = phaseNowIdx(v); i < fs.length; i++) {
+      var o = tdSorted(fs[i]).filter(function (x) { return !x.klaar; });
+      if (o.length) return { f: fs[i], i: i, t: o[0] };
+    }
+    return null;
+  }
+  function visieZin(v) {
+    var hz = String(v.horizon || "").trim();
+    return (hz ? "Over " + hz + " ben je " : "Je wordt ") + lcFirst(v.rol) + (String(v.specialisme || "").trim() ? ", gespecialiseerd in " + String(v.specialisme).trim() : "") + ".";
+  }
+
+  function renderVisie() {
+    var band = $("#visie-band"), body = $("#visie-body"); if (!band || !body) return;
+    if (S.visieDraft) { renderVisieForm(band, body); return; }
+    var v = vis(), writable = canWrite(), w = h("div", { class: "wrap" });
+    band.replaceChildren(w);
+    band.classList.toggle("has-pad", !!(v && (v.fasen || []).length));
+    if (!S.loaded.instellingen) { w.append(h("p", { class: "visie-kicker", text: "Laden…" })); body.replaceChildren(); return; }
+    if (!v) {
+      w.append(h("h1", { class: "visie-zin", text: "Waar wil je over een paar jaar staan?" }),
+        h("p", { class: "visie-kern", text: "Leg je visie vast: wie je wordt, hoe je je geld verdient en welke tussendoelen je daarvoor haalt. Dan zie je elke week waar je het voor doet." }),
+        writable ? h("p", null, h("button", { class: "btn primary", type: "button", text: "Visie vastleggen", onclick: startVisieEdit })) : null);
+      body.replaceChildren();
+      return;
+    }
+    var fs = v.fasen || [], now = phaseNowIdx(v);
+    if (S.visieFase == null || S.visieFase >= fs.length) S.visieFase = now;
+    w.append(
+      h("div", { class: "visie-top" },
+        h("p", { class: "visie-kicker", text: "Je visie" }),
+        writable ? h("button", { class: "link-btn", type: "button", text: "Visie bewerken", onclick: startVisieEdit }) : null),
+      h("h1", { class: "visie-zin", text: visieZin(v) }),
+      v.kern ? h("p", { class: "visie-kern", text: v.kern }) : null,
+      (v.themas || []).length ? h("ul", { class: "visie-themas", "aria-label": "Waar je in uitblinkt" }, v.themas.map(function (t) { return h("li", { text: t }); })) : null,
+      v.werkwijze ? h("p", { class: "visie-werk", text: v.werkwijze }) : null,
+      fs.length ? padStepper(fs, now) : null);
+    body.replaceChildren.apply(body, [fs.length ? fasePanel(fs) : null, geldKaarten(v), waaromBlok(v)].filter(Boolean));
+  }
+  // Het pad: de fasen als stappen. Klik een fase om de tussendoelen eronder te zien; pijltjestoetsen wisselen.
+  function padStepper(fs, now) {
+    var nav = h("div", { class: "pad", role: "tablist", "aria-label": "Het pad, in fasen" });
+    fs.forEach(function (f, i) {
+      var tds = tdList(f), done = tds.filter(function (x) { return x.klaar; }).length;
+      var st = i < now ? "past" : i === now ? "now" : "next", sel = S.visieFase === i;
+      function pick(j) { S.visieFase = j; renderVisie(); var b = document.getElementById("pad-" + j); if (b) b.focus(); }
+      nav.append(h("button", {
+        type: "button", role: "tab", class: "pad-step " + st, id: "pad-" + i, "aria-selected": sel ? "true" : "false", "aria-controls": "fase-panel", tabindex: sel ? "0" : "-1",
+        onclick: function () { pick(i); },
+        onkeydown: function (e) {
+          var k = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : e.key === "ArrowLeft" || e.key === "ArrowUp" ? -1 : 0;
+          if (k) { e.preventDefault(); pick((i + k + fs.length) % fs.length); }
+        },
+      },
+        h("span", { class: "pad-dot", "aria-hidden": "true" }, st === "past" ? icon("check") : String(i + 1)),
+        h("span", { class: "pad-txt" },
+          h("span", { class: "pad-name", text: f.naam || "Fase " + (i + 1) }),
+          h("span", { class: "pad-when", text: phaseRange(f) }),
+          h("span", { class: "pad-prog", text: (st === "now" ? "Je bent hier. " : "") + (tds.length ? done + " van " + tds.length + " gehaald" : "nog geen tussendoelen") }))));
+    });
+    return h("div", { class: "pad-wrap" }, h("h2", { class: "pad-label", text: "Het pad" }), nav);
+  }
+  function fasePanel(fs) {
+    var i = S.visieFase, f = fs[i], writable = canWrite();
+    var box = h("section", { class: "panel fase", id: "fase-panel", role: "tabpanel", "aria-labelledby": "pad-" + i });
+    var tds = tdSorted(f), done = tds.filter(function (x) { return x.klaar; }).length;
+    box.append(h("div", { class: "fase-head" },
+      h("h2", { text: "Fase " + (i + 1) + ": " + (f.naam || "") }),
+      tds.length ? h("span", { class: "fase-count", text: done + " van " + tds.length + " gehaald" }) : null));
+    if (f.doel) box.append(h("p", { class: "fase-doel", text: f.doel }));
+    if (!tds.length) box.append(h("p", { class: "hint", text: "Nog geen tussendoelen in deze fase. Voeg ze toe met Visie bewerken." }));
+    else box.append(h("ul", { class: "td-list" }, tds.map(function (x) {
+      var d = parseYmd(x.datum), cd = d && !x.klaar ? countdown(d) : null, ko = x.klaar && parseYmd(x.klaarOp), g = x.doel && S.goals[x.doel];
+      return h("li", { class: x.klaar ? "done" : "" }, h("label", null,
+        h("input", { type: "checkbox", id: "td-" + f.id + "-" + x.id, checked: !!x.klaar, disabled: !writable, onchange: function (e) { toggleTd(f.id, x.id, e.target.checked); } }),
+        h("span", { class: "td-t", text: x.tekst }),
+        x.klaar ? h("span", { class: "td-d", text: ko ? "gehaald " + dateShortY(ko) : "gehaald" })
+          : d ? h("span", { class: "td-d" + (cd.over ? " over" : ""), text: dateShortY(d) + ", " + cd.text }) : null,
+        g ? h("span", { class: "td-g", text: "Hier werk je elke week aan via je doel " + g.titel + "." }) : null));
+    })));
+    return box;
+  }
+  function geldKaarten(v) {
+    function kaart(key, kop) {
+      var m = v[key] || {}, pts = (m.punten || []).filter(Boolean);
+      if (!m.titel && !m.tekst && !pts.length) return null;
+      return h("section", { class: "panel geld geld-" + key, "aria-label": kop },
+        h("h2", { class: "geld-h", text: kop }),
+        m.titel ? h("p", { class: "geld-titel", text: m.titel }) : null,
+        m.tekst ? h("p", { class: "geld-tekst", text: m.tekst }) : null,
+        pts.length ? h("ul", { class: "geld-punten" }, pts.map(function (p) { return h("li", { text: p }); })) : null);
+    }
+    var a = kaart("nu", "Zo verdien je nu je geld"), b = kaart("later", "Zo verdien je later je geld");
+    return a || b ? h("div", { class: "geld-grid" }, a, b) : null;
+  }
+  function waaromBlok(v) {
+    var w = (v.waarom || []).filter(Boolean);
+    if (!w.length) return null;
+    return h("section", { class: "visie-waarom", "aria-label": "Waarom dit je energie geeft" },
+      h("h2", { class: "geld-h", text: "Waarom dit je energie geeft" }),
+      h("ul", null, w.map(function (t) { return h("li", { text: t }); })));
+  }
+  function toggleTd(fid, tid, val) {
+    if (!canWrite()) return;
+    var v = clone(S.visie) || {}, f = (v.fasen || []).filter(function (x) { return x.id === fid; })[0];
+    var t = f && (f.tussendoelen || []).filter(function (x) { return x.id === tid; })[0];
+    if (!t) return;
+    t.klaar = !!val;
+    if (val) t.klaarOp = ymd(clockNow()); else delete t.klaarOp;
+    v.bijgewerkt = clockNow().toISOString();
+    S.visie = v;
+    queueWrite("instellingen/visie", v, 200);
+    renderVisie(); renderOvVisie(); renderOvKoers();
+    var cb = document.getElementById("td-" + fid + "-" + tid);
+    if (cb) cb.focus({ preventScroll: true });
+    if (val) toast("Tussendoel gehaald.");
+  }
+
+  // Op Overzicht: in drie regels waar je naartoe werkt, in welke fase je zit en wat je volgende stap is.
+  function renderOvVisie() {
+    var box = $("#ov-visie"); if (!box) return;
+    if (!S.loaded.instellingen) { box.hidden = true; return; }
+    var v = vis();
+    box.hidden = false;
+    if (!v) {
+      box.replaceChildren(h("div", { class: "ovv-main" },
+        h("p", { class: "ovv-rol", text: "Waar werk je naartoe?" }),
+        h("p", { class: "ovv-fase", text: "Leg je visie vast: wie je over een paar jaar bent, hoe je je geld verdient en welke tussendoelen je daarvoor haalt." })),
+        h("div", { class: "ovv-side" }, h("a", { class: "link-btn", href: "#doelen", text: "Visie vastleggen" })));
+      return;
+    }
+    var fs = v.fasen || [], i = phaseNowIdx(v), f = fs[i], nx = nextTd(v), nd = nx && parseYmd(nx.t.datum), ncd = nd && countdown(nd);
+    box.replaceChildren(
+      h("div", { class: "ovv-main" },
+        h("p", { class: "ovv-rol", text: "Op weg naar " + lcFirst(v.rol) }),
+        f ? h("p", { class: "ovv-fase", text: "Fase " + (i + 1) + " van " + fs.length + ": " + lcFirst(f.naam || "") + (f.tot ? ", tot " + ymText(f.tot) : "") }) : null,
+        nx ? h("p", { class: "ovv-next" },
+          h("span", { class: "ovv-k", text: "Volgende stap" }),
+          h("span", { class: "ovv-t", text: nx.t.tekst }),
+          nd ? h("span", { class: "ovv-d" + (ncd.over ? " over" : ""), text: dateShortY(nd) + ", " + ncd.text }) : null) : null),
+      h("div", { class: "ovv-side" },
+        fs.length > 1 ? h("span", { class: "ovv-dots", "aria-hidden": "true" }, fs.map(function (x, j) { return h("i", { class: j < i ? "past" : j === i ? "now" : "" }); })) : null,
+        h("a", { class: "link-btn", href: "#doelen", text: "Bekijk je visie" })));
+  }
+
+  function startVisieEdit() {
+    if (!canWrite()) return;
+    var b = clone(S.visie) || {};
+    function geld(m) { m = m || {}; return { titel: m.titel || "", tekst: m.tekst || "", punten: (m.punten || []).join("\n") }; }
+    S.visieDraft = {
+      rol: b.rol || "", specialisme: b.specialisme || "", horizon: b.horizon || "", kern: b.kern || "",
+      themas: (b.themas || []).join("\n"), werkwijze: b.werkwijze || "",
+      nu: geld(b.nu), later: geld(b.later),
+      fasen: (b.fasen || []).map(function (f) {
+        return { id: f.id || rid("f"), naam: f.naam || "", van: f.van || "", tot: f.tot || "", doel: f.doel || "",
+          tussendoelen: (f.tussendoelen || []).map(function (t) { return Object.assign({}, t, { id: t.id || rid("t") }); }) };
+      }),
+      waarom: (b.waarom || []).join("\n"),
+    };
+    if (!S.visieDraft.fasen.length) S.visieDraft.fasen.push({ id: rid("f"), naam: "", van: "", tot: "", doel: "", tussendoelen: [] });
+    renderVisie();
+    window.scrollTo(0, 0);
+    var el = document.getElementById("ve-rol"); if (el) el.focus({ preventScroll: true });
+  }
+  function renderVisieForm(band, body) {
+    var d = S.visieDraft;
+    band.classList.remove("has-pad");
+    band.replaceChildren(h("div", { class: "wrap" }, h("p", { class: "visie-kicker", text: "Je visie" }), h("h1", { class: "visie-zin", text: "Visie bewerken" })));
+    function field(id, label, el, hint) { return h("div", { class: "field" }, h("label", { for: id, text: label }), el, hint ? h("span", { class: "hint", text: hint }) : null); }
+    function inp(id, val, set, ph, max, type) { return h("input", { id: id, type: type || "text", maxlength: max || 160, value: val || "", placeholder: ph || "", oninput: function (e) { set(e.target.value); } }); }
+    function ta(id, val, set, rows, ph) { return h("textarea", { id: id, rows: rows || 3, maxlength: 2400, value: val || "", placeholder: ph || "", oninput: function (e) { set(e.target.value); } }); }
+    var form = h("form", { class: "panel visie-form", onsubmit: function (e) { e.preventDefault(); saveVisieDraft(); } });
+    form.append(
+      h("h2", { class: "vf-h", text: "Wie je wordt" }),
+      h("div", { class: "g-form-grid two" },
+        field("ve-rol", "Rol", inp("ve-rol", d.rol, function (x) { d.rol = x; }, "Bijv. senior integraal ontwerpadviseur", 80)),
+        field("ve-spec", "Gespecialiseerd in (optioneel)", inp("ve-spec", d.specialisme, function (x) { d.specialisme = x; }, "Bijv. duurzaamheid en regelgeving", 80))),
+      field("ve-hor", "Over hoeveel tijd (optioneel)", inp("ve-hor", d.horizon, function (x) { d.horizon = x; }, "Bijv. 3 tot 6 jaar", 40), "Bovenaan staat dan: Over 3 tot 6 jaar ben je …"),
+      field("ve-kern", "Wat je doet en voor wie", ta("ve-kern", d.kern, function (x) { d.kern = x; }, 4)),
+      field("ve-them", "Waar je in uitblinkt, één per regel", ta("ve-them", d.themas, function (x) { d.themas = x; }, 6)),
+      field("ve-werk", "Hoe je werkt (optioneel)", ta("ve-werk", d.werkwijze, function (x) { d.werkwijze = x; }, 2)));
+    [["nu", "Zo verdien je nu je geld", "Bijv. junior bouwkundig adviseur bij Planresult"], ["later", "Zo verdien je later je geld", "Bijv. senior adviseur bij een bureau, of zelfstandig"]].forEach(function (k) {
+      var m = d[k[0]];
+      form.append(h("h2", { class: "vf-h", text: k[1] }),
+        field("ve-" + k[0] + "-t", "In één regel", inp("ve-" + k[0] + "-t", m.titel, function (x) { m.titel = x; }, k[2], 120)),
+        field("ve-" + k[0] + "-x", "Toelichting (optioneel)", ta("ve-" + k[0] + "-x", m.tekst, function (x) { m.tekst = x; }, 2)),
+        field("ve-" + k[0] + "-p", "Punten, één per regel (optioneel)", ta("ve-" + k[0] + "-p", m.punten, function (x) { m.punten = x; }, 3)));
+    });
+    form.append(h("h2", { class: "vf-h", text: "Het pad" }));
+    d.fasen.forEach(function (f, fi) {
+      var box = h("fieldset", { class: "vf-fase" }, h("legend", { text: "Fase " + (fi + 1) }));
+      box.append(
+        field("vf-" + f.id + "-n", "Naam", inp("vf-" + f.id + "-n", f.naam, function (x) { f.naam = x; }, "Bijv. positioneren binnen Planresult", 80)),
+        h("div", { class: "g-form-grid two" },
+          field("vf-" + f.id + "-van", "Van (maand)", inp("vf-" + f.id + "-van", f.van, function (x) { f.van = x; }, "JJJJ-MM", 7, "month")),
+          field("vf-" + f.id + "-tot", "Tot en met (maand)", inp("vf-" + f.id + "-tot", f.tot, function (x) { f.tot = x; }, "JJJJ-MM", 7, "month"))),
+        field("vf-" + f.id + "-d", "Wat deze fase oplevert", ta("vf-" + f.id + "-d", f.doel, function (x) { f.doel = x; }, 2)));
+      var rows = h("div", { class: "rows" });
+      f.tussendoelen.forEach(function (t, ti) {
+        rows.append(h("div", { class: "row-edit ms" },
+          h("input", { id: "vt-" + t.id, type: "text", maxlength: 200, "aria-label": "Tussendoel", value: t.tekst || "", placeholder: "Tussendoel", oninput: function (e) { t.tekst = e.target.value; } }),
+          h("input", { id: "vtd-" + t.id, type: "date", "aria-label": "Datum van het tussendoel, optioneel", value: t.datum || "", oninput: function (e) { t.datum = e.target.value; } }),
+          delBtn(function () { f.tussendoelen.splice(ti, 1); renderVisie(); }, "Verwijder tussendoel", false)));
+      });
+      var delFase = null;
+      if (d.fasen.length > 1) {
+        delFase = h("button", { type: "button", class: "link-btn", style: "color:var(--down)", text: "Fase verwijderen" });
+        var armed = false, tm;
+        delFase.addEventListener("click", function () {
+          if (!armed) { armed = true; delFase.textContent = "Klik nogmaals om fase " + (fi + 1) + " te verwijderen"; tm = setTimeout(function () { armed = false; delFase.textContent = "Fase verwijderen"; }, 3000); return; }
+          clearTimeout(tm); d.fasen.splice(fi, 1); renderVisie();
+        });
+      }
+      box.append(h("div", { class: "field" }, h("span", { class: "label", text: "Tussendoelen, met een datum als je die weet" }), rows,
+        h("div", { class: "vf-acts" },
+          h("button", { type: "button", class: "link-btn", text: "Tussendoel toevoegen", onclick: function () { var nt = { id: rid("t"), tekst: "", datum: "", klaar: false }; f.tussendoelen.push(nt); renderVisie(); var el = document.getElementById("vt-" + nt.id); if (el) el.focus(); } }),
+          delFase)));
+      form.append(box);
+    });
+    form.append(h("p", null, h("button", { type: "button", class: "link-btn", text: "Fase toevoegen", onclick: function () { var nf = { id: rid("f"), naam: "", van: "", tot: "", doel: "", tussendoelen: [] }; d.fasen.push(nf); renderVisie(); var el = document.getElementById("vf-" + nf.id + "-n"); if (el) el.focus(); } })),
+      h("h2", { class: "vf-h", text: "Waarom dit je energie geeft" }),
+      field("ve-why", "Eén reden per regel", ta("ve-why", d.waarom, function (x) { d.waarom = x; }, 4)),
+      h("div", { class: "form-actions" },
+        h("button", { type: "submit", class: "btn primary", text: "Opslaan" }),
+        h("button", { type: "button", class: "btn ghost", text: "Annuleren", onclick: function () { S.visieDraft = null; renderVisie(); } })));
+    body.replaceChildren(form);
+  }
+  function saveVisieDraft() {
+    var d = S.visieDraft; if (!d || !canWrite()) return;
+    var rol = String(d.rol || "").trim();
+    if (!rol) { toast("Vul je rol in: wie wil je worden?"); var el = document.getElementById("ve-rol"); if (el) el.focus(); return; }
+    function txt(s, max) { return String(s || "").trim().slice(0, max); }
+    function lines(s, max, n) { return String(s || "").split(/\n+/).map(function (x) { return x.trim().slice(0, max); }).filter(Boolean).slice(0, n); }
+    function geld(m) { return { titel: txt(m.titel, 120), tekst: txt(m.tekst, 800), punten: lines(m.punten, 240, 8) }; }
+    var old = S.visie || {};
+    var body = {
+      rol: rol.slice(0, 80), specialisme: txt(d.specialisme, 80), horizon: txt(d.horizon, 40), kern: txt(d.kern, 1200),
+      themas: lines(d.themas, 90, 12), werkwijze: txt(d.werkwijze, 600),
+      nu: geld(d.nu), later: geld(d.later),
+      fasen: d.fasen.map(function (f) {
+        return {
+          id: f.id, naam: txt(f.naam, 80), van: /^\d{4}-\d{2}$/.test(f.van) ? f.van : "", tot: /^\d{4}-\d{2}$/.test(f.tot) ? f.tot : "", doel: txt(f.doel, 600),
+          tussendoelen: f.tussendoelen.filter(function (t) { return String(t.tekst || "").trim(); }).map(function (t) {
+            var o = { id: t.id, tekst: txt(t.tekst, 200), datum: parseYmd(t.datum) ? t.datum : "", klaar: !!t.klaar };
+            if (t.klaar && t.klaarOp) o.klaarOp = t.klaarOp;
+            if (t.doel) o.doel = t.doel;
+            return o;
+          }),
+        };
+      }).filter(function (f) { return f.naam || f.tussendoelen.length; }),
+      waarom: lines(d.waarom, 240, 8),
+      bijgewerkt: clockNow().toISOString(),
+    };
+    if (old.bron) body.bron = old.bron;
+    S.visie = body; S.visieDraft = null; S.visieFase = null;
+    queueWrite("instellingen/visie", body, 0);
+    renderVisie(); renderOvVisie(); renderOvKoers();
+    toast("Visie opgeslagen.");
+    window.scrollTo(0, 0);
+  }
+
   /* ================= Render: doelen ================= */
   var CATS = ["Werk", "Focus", "Sport", "Geld", "Project", "Vrije tijd", "Persoonlijk"];
   var UNITS = ["km", "min", "uur", "kg", "pagina's"];
@@ -1140,6 +1429,10 @@
       var dl = parseYmd(g.deadline);
       if (dl && dayNum(dl) >= t - 31) out.push({ d: dl, text: g.resultaat ? cut(g.resultaat, 90) : g.titel, g: g, kind: "dl" });
     });
+    var v = vis();
+    if (v) (v.fasen || []).forEach(function (f) {
+      tdList(f).forEach(function (x) { var d = parseYmd(x.datum); if (!x.klaar && d) out.push({ d: d, text: cut(x.tekst, 80), g: { titel: f.naam || "" }, kind: "td" }); });
+    });
     out.sort(function (a, b) { return a.d - b.d; });
     return out.slice(0, n);
   }
@@ -1157,7 +1450,7 @@
       return h("li", { class: "cal" + (cd.over ? " over" : "") },
         h("div", { class: "cal-date", "aria-hidden": "true" }, h("span", { class: "cal-day", text: String(x.d.getDate()) }), h("span", { class: "cal-mon", text: MONTHS[x.d.getMonth()] + (x.d.getFullYear() !== clockNow().getFullYear() ? " '" + String(x.d.getFullYear()).slice(2) : "") })),
         h("div", { class: "cal-body" },
-          h("div", { class: "cal-top" }, h("span", { class: "cal-kind", text: x.kind === "dl" ? "Streefdatum" : "Mijlpaal" }), h("span", { class: "cal-cd" + (cd.over ? " over" : ""), text: cd.text })),
+          h("div", { class: "cal-top" }, h("span", { class: "cal-kind", text: x.kind === "dl" ? "Streefdatum" : x.kind === "td" ? "Tussendoel" : "Mijlpaal" }), h("span", { class: "cal-cd" + (cd.over ? " over" : ""), text: cd.text })),
           h("strong", { class: "cal-what", text: x.text }),
           h("span", { class: "cal-meta", text: x.g.titel || "" })));
     })));
@@ -1201,7 +1494,7 @@
   /* ================= Sparren met Claude ================= */
   var SUGS = [
     "Waar moet ik deze week voorrang aan geven?",
-    "Zijn mijn doelen realistisch voor één jaar?",
+    "Passen mijn doelen bij mijn visie en de fase waarin ik zit?",
     "Wat betekent mijn handelsplan voor deze week?",
     "Ik loop achter. Wat stuur ik bij?"
   ];
@@ -1230,6 +1523,7 @@
       "Antwoord in het Nederlands, direct en concreet, als een eerlijke coach die meedenkt. Geen algemene motivatieteksten en geen lange lijsten met tips. Houd het kort, meestal onder de 150 woorden, tenzij hij om meer vraagt. Stel hooguit één vraag terug.",
       "Baseer je op de gegevens hieronder. Zeg eerlijk als iets onrealistisch is, als hij te veel tegelijk wil, of als een doel niet meetbaar is.",
       "Hij wil progressief opbouwen (progressive overload): geleidelijk meer doen. Extra keren boven zijn plan tellen niet mee in de weekscore (die is per doel maximaal 100%) maar wel in zijn opbouw. Help hem met kleine stappen: één keer per week erbij als hij de lat een paar weken haalt of overschrijdt, en bij hoeveelheden (km, minuten) ongeveer 10% per week. Koppel wat hij elke week doet aan waarom hij het doet en aan zijn streefdata.",
+      "Hij heeft een visie: wie hij over een paar jaar is, hoe hij nu en later zijn geld verdient, en een pad in fasen met tussendoelen. Verbind je adviezen daaraan: helpt dit hem bij de volgende stap in zijn huidige fase? Wijs het eerlijk aan als zijn doelen of acties niet bij die visie passen.",
       "Over beleggen: zijn handelsplan komt uit zijn eigen Handelsplan-site en staat hieronder samengevat. Help hem consequent volgens zijn eigen plan, niveaus en spelregels te handelen. Geef geen persoonlijk koop- of verkoopadvies en geen koersvoorspellingen. De marktcijfers zijn momentopnames met een datum, geen live koersen; zeg dat als hij ernaar vraagt.",
       S.toolsOk
         ? "Als een concrete wijziging helpt (een doel scherper formuleren, een wekelijkse actie aanpassen, een nieuw doel, of iets vastleggen in het logboek), stel die dan voor met de tools, hooguit drie per antwoord. Hij beslist zelf of hij ze toepast. Noem in je tekst kort wat je voorstelt. Gebruik de doel_id's en actie_id's uit de gegevens."
@@ -1241,6 +1535,24 @@
     var L = [sparRules(), "", "=== GEGEVENS UIT HET DASHBOARD ==="];
     L.push("Vandaag: " + DAYS[now.getDay()] + " " + now.getDate() + " " + MONTHS_LONG[now.getMonth()] + " " + now.getFullYear() + ", week " + isoWeek(curMon).week + ".");
     L.push("Het dashboardjaar loopt van " + longDate(ws[0]) + " tot en met " + longDate(addDays(ws[51], 6)) + ". Score per week = gemiddeld percentage afgevinkte acties over de doelen; 60% of meer telt als op koers.");
+    var vv = vis();
+    if (vv) {
+      L.push("", "VISIE (waar hij over " + (vv.horizon || "een paar jaar") + " wil staan; daar toetst hij zijn doelen aan):");
+      L.push("Rol: " + vv.rol + (vv.specialisme ? ", gespecialiseerd in " + vv.specialisme : ""));
+      if (vv.kern) L.push("Kern: " + cut(vv.kern, 700));
+      if ((vv.themas || []).length) L.push("Thema's: " + vv.themas.join("; "));
+      if (vv.werkwijze) L.push("Werkwijze: " + cut(vv.werkwijze, 300));
+      [["nu", "Zo verdient hij nu zijn geld: "], ["later", "Zo verdient hij later waarschijnlijk zijn geld: "]].forEach(function (k) {
+        var m = vv[k[0]] || {};
+        if (m.titel || m.tekst || (m.punten || []).length) L.push(k[1] + [m.titel, m.tekst].filter(Boolean).join(". ") + ((m.punten || []).length ? " (" + m.punten.join("; ") + ")" : ""));
+      });
+      var vpi = phaseNowIdx(vv);
+      (vv.fasen || []).forEach(function (f, i) {
+        L.push("Fase " + (i + 1) + (i === vpi ? " (hier zit hij nu)" : "") + ": " + (f.naam || "") + (phaseRange(f) ? " (" + phaseRange(f) + ")" : "") + (f.doel ? ". " + cut(f.doel, 300) : ""));
+        tdSorted(f).forEach(function (t) { L.push("  - " + (t.klaar ? "[gehaald] " : t.datum ? "[open, voor " + t.datum + "] " : "[open] ") + t.tekst); });
+      });
+      if ((vv.waarom || []).length) L.push("Waarom dit hem energie geeft: " + vv.waarom.join("; "));
+    }
     var idx = -1; ws.forEach(function (m, i) { if (m.getTime() === curMon.getTime()) idx = i; });
     var end = idx < 0 ? (curMon.getTime() > ws[51].getTime() ? 52 : 0) : idx + 1;
     var recent = ws.slice(Math.max(0, end - 8), end);
@@ -2245,8 +2557,10 @@
   function renderAll(force) {
     renderHeader();
     renderOverview();
+    renderOvVisie();
     renderOvKoers();
     renderOvHp();
+    renderVisie();
     renderGoals(force);
     renderNotes();
     renderInvest();
@@ -2298,6 +2612,11 @@
     S.db.doc("instellingen/algemeen").onSnapshot(function (d) {
       if (!S.dirty.has("instellingen/algemeen")) S.settings = d.exists ? clone(d.data()) || {} : {};
       S.loaded.instellingen = true; renderAll();
+    }, err);
+    S.db.doc("instellingen/visie").onSnapshot(function (d) {
+      if (!S.dirty.has("instellingen/visie")) S.visie = d.exists ? clone(d.data()) || null : null;
+      if (!S.loaded.instellingen) return;
+      renderVisie(); renderOvVisie(); renderOvKoers();
     }, err);
   }
 
